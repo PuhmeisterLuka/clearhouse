@@ -37,10 +37,32 @@ uv run clearhouse generate
 
 This writes `data/raw`, `data/reference` and `data/truth`. The pipeline must never read `data/truth`; only the scorer does.
 
+```bash
+uv run clearhouse ingest --dump out/raw_orders.jsonl
+```
+
+Reads every raw file into one common record shape and prints what was found per source, plus any structural issues.
+
+## Development
+
+Tests and lint (ruff covers unused imports and variables, so dead code fails the check):
+
+```bash
+uv run pytest && uv run ruff check .
+```
+
+## How ingestion works
+
+Each adapter knows one format and nothing else. It maps that format's fields onto a shared `RawOrder` / `RawLine` shape and tags every record with where it came from (`line 214`, `orders[37].items[1]`, `Order[12]/Line[3]`), so any problem found later can be traced back to the exact spot in the source file.
+
+Values are kept exactly as written. `"10,50"`, `" BRK-0042 "` and `"2 pcs"` all reach the next stage untouched, because deciding what they mean is cleaning, and cleaning should be logged. JSON is parsed with numbers as strings, so `23.0` stays `"23.0"` instead of becoming a float. The one thing adapters do interpret is scale: wholesale prices in cents are recorded with `price_scale = 100` rather than divided.
+
+Adapters don't trust their input structurally either. The till CSV header is found by column names rather than position, so a preamble, reordered or extra columns, or a different delimiter don't break it. Encoding is tried as strict UTF-8 first and only then as cp1250. The footer's row count is checked against the rows actually read to catch truncated exports. Webshop and wholesale readers report fields they don't recognise, which is usually the first sign an upstream system changed its schema. Files that no adapter claims are reported, not ignored.
+
 ## Build log
 
 - [x] Step 1: ground-truth world and messy data generator with defect ledger
-- [ ] Step 2: ingestion adapters
+- [x] Step 2: ingestion adapters
 - [ ] Step 3: validation rules and issue log
 - [ ] Step 4: cleaning
 - [ ] Step 5: reconciliation
