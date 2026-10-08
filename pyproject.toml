@@ -1,0 +1,20 @@
+[project]
+name = "clearhouse"
+version = "0.1.0"
+description = "Ingest, validate, clean and reconcile messy CSV/JSON/XML order exports, then score the result against a known defect ledger."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+clearhouse = "clearhouse.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
