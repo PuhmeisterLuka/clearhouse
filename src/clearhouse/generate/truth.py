@@ -6,52 +6,61 @@ Everything messy is derived from this later, so this module never injects defect
 from __future__ import annotations
 
 import random
-import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
+
+from ..text import ascii_fold
 
 CENT = Decimal("0.01")
 LOCAL_TZ = ZoneInfo("Europe/Ljubljana")
 YEAR = 2025
+
+SHOP_HOURS = (8, 20)
+WAREHOUSE_HOURS = (7, 16)
+ALL_DAY = (0, 24)
+
+WALK_IN_SHARE = 0.3  # till sales with no customer attached
+PICKUP_SHARE = 0.12  # Slovenian web orders collected in store
 WHOLESALE_DISCOUNT = Decimal("0.85")
 
-
-def money(x: Decimal | int | str) -> Decimal:
-    return Decimal(x).quantize(CENT, ROUND_HALF_UP)
-
-
 CATALOG = {
-    "BRK": ("Brakes", ["Disc Brake Pads", "Hydraulic Caliper", "Rotor 160mm", "Rotor 180mm", "V-Brake Set", "Brake Cable Kit"]),
+    "BRK": ("Brakes", ["Disc Brake Pads", "Hydraulic Caliper", "Rotor 160mm", "Rotor 180mm", "V-Brake Set",
+                       "Brake Cable Kit"]),
     "CHN": ("Chains", ["11-Speed Chain", "12-Speed Chain", "Single Speed Chain", "Quick Link 5-pack", "Chain Checker"]),
-    "TYR": ("Tyres", ["Road Tyre 700x28", "Gravel Tyre 700x40", "MTB Tyre 29x2.4", "Inner Tube 700c", "Tubeless Sealant 500ml"]),
+    "TYR": ("Tyres", ["Road Tyre 700x28", "Gravel Tyre 700x40", "MTB Tyre 29x2.4", "Inner Tube 700c",
+                      "Tubeless Sealant 500ml"]),
     "SDL": ("Saddles", ["Road Saddle Carbon", "Comfort Saddle Gel", "Gravel Saddle", "Kids Saddle"]),
     "LGT": ("Lights", ["Front Light 800lm", "Rear Light USB", "Light Set Commuter", "Helmet Light"]),
     "TLS": ("Tools", ["Multi-Tool 18", "Torque Wrench", "Floor Pump", "Mini Pump", "Tyre Levers"]),
     "HLM": ("Helmets", ["Road Helmet Aero", "MTB Helmet Trail", "Urban Helmet", "Kids Helmet"]),
 }
 
-FIRST = ["Žiga", "Luka", "Nika", "Ana", "Matej", "Špela", "Tjaša", "Jure", "Rok", "Maša", "Ivana", "Matija", "Đorđe", "Lena",
-         "Jakob", "Sophie", "Felix", "Hannah", "Oliver", "Emily", "James", "Chloe", "Noah", "Mia", "Lukas", "Anja", "Tomaž", "Urška"]
-LAST = ["Novak", "Horvat", "Krajnc", "Kovačič", "Zupančič", "Potočnik", "Mlakar", "Vidmar", "Golob", "Jurić", "Kovačević",
-        "Babić", "Müller", "Gruber", "Huber", "Wagner", "Smith", "Taylor", "Brown", "Wilson", "Johnson", "Petrović", "Černe"]
-BUSINESSES = ["Kolesarstvo Rog", "Bike Center Maribor", "Alpe Cycles", "Velo Graz", "Biciklistički Centar Zagreb", "Trail Shop Bled",
-              "Pedal & Co", "Kolo Servis Celje", "Gravel House Koper", "Radhaus Klagenfurt", "MTB Pohorje", "Urban Wheels Ljubljana",
-              "Bici Trieste", "Spica Sport", "Hribi Bikes", "Tirol Rad", "Istria Bike", "Kranj Kolo", "Soča Outdoor", "Panonija Cikel"]
-SUFFIX = {"SI": "d.o.o.", "AT": "GmbH", "HR": "d.o.o.", "IT": "S.r.l."}
+FIRST = ["Žiga", "Luka", "Nika", "Ana", "Matej", "Špela", "Tjaša", "Jure", "Rok", "Maša", "Ivana", "Matija",
+         "Đorđe", "Lena", "Jakob", "Sophie", "Felix", "Hannah", "Oliver", "Emily", "James", "Chloe", "Noah",
+         "Mia", "Lukas", "Anja", "Tomaž", "Urška"]
+LAST = ["Novak", "Horvat", "Krajnc", "Kovačič", "Zupančič", "Potočnik", "Mlakar", "Vidmar", "Golob", "Jurić",
+        "Kovačević", "Babić", "Müller", "Gruber", "Huber", "Wagner", "Smith", "Taylor", "Brown", "Wilson",
+        "Johnson", "Petrović", "Černe"]
+EMAIL_DOMAINS = ["gmail.com", "siol.net", "outlook.com", "gmx.at", "proton.me"]
 
-# Consumer country mix per channel. The till only sees people who walk in.
+BUSINESSES = ["Kolesarstvo Rog", "Bike Center Maribor", "Alpe Cycles", "Velo Graz", "Biciklistički Centar Zagreb",
+              "Trail Shop Bled", "Pedal & Co", "Kolo Servis Celje", "Gravel House Koper", "Radhaus Klagenfurt",
+              "MTB Pohorje", "Urban Wheels Ljubljana", "Bici Trieste", "Spica Sport", "Hribi Bikes", "Tirol Rad",
+              "Istria Bike", "Kranj Kolo", "Soča Outdoor", "Panonija Cikel"]
+BUSINESS_COUNTRIES = ["SI", "SI", "SI", "AT", "HR", "IT"]
+LEGAL_SUFFIX = {"SI": "d.o.o.", "AT": "GmbH", "HR": "d.o.o.", "IT": "S.r.l."}
+
+# Repeated entries weight the draw. The till mostly sees locals; the webshop sells further afield.
 POS_COUNTRIES = ["SI"] * 8 + ["AT", "HR"]
 WEB_COUNTRIES = ["SI"] * 4 + ["AT"] * 2 + ["HR", "DE", "IT", "GB", "GB", "US", "US"]
 CURRENCY_BY_COUNTRY = {"GB": "GBP", "US": "USD"}
-
 BASE_FX = {"USD": Decimal("1.08"), "GBP": Decimal("0.85")}
 
 
-def ascii_fold(s: str) -> str:
-    s = s.replace("Đ", "D").replace("đ", "d")
-    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+def money(x: Decimal | int | str) -> Decimal:
+    return Decimal(x).quantize(CENT, ROUND_HALF_UP)
 
 
 @dataclass(frozen=True)
@@ -87,11 +96,11 @@ class Order:
     channel: str
     native_id: str
     customer: Customer | None
-    placed_at: datetime  # always tz-aware UTC
+    placed_at: datetime  # tz-aware UTC
     currency: str
     lines: list[Line]
-    collect_in_store: bool = False
-    pos_receipt: str | None = None  # set when a web order also gets rung through the till
+    pickup_at: datetime | None = None  # click-and-collect web orders get rung through the till on pickup
+    pos_receipt: str | None = None  # the till's receipt number for that pickup
 
     @property
     def key(self) -> str:
@@ -101,6 +110,10 @@ class Order:
     def total(self) -> Decimal:
         return sum((ln.total for ln in self.lines), Decimal("0.00"))
 
+    @property
+    def collect_in_store(self) -> bool:
+        return self.pickup_at is not None
+
 
 @dataclass
 class World:
@@ -109,130 +122,141 @@ class World:
     fx: dict[tuple[int, str], Decimal]  # (month, currency) -> units per 1 EUR
     orders: list[Order] = field(default_factory=list)
 
-    def product(self, sku: str) -> Product:
-        return self._by_sku[sku]
-
-    def __post_init__(self) -> None:
-        self._by_sku = {p.sku: p for p in self.products}
+    def rate(self, currency: str, when: datetime) -> Decimal:
+        """Units of `currency` per euro in the local month of `when`."""
+        if currency == "EUR":
+            return Decimal(1)
+        return self.fx[(when.astimezone(LOCAL_TZ).month, currency)]
 
     def total_eur(self, order: Order) -> Decimal:
-        if order.currency == "EUR":
-            return order.total
-        rate = self.fx[(order.placed_at.astimezone(LOCAL_TZ).month, order.currency)]
-        return money(order.total / rate)
+        return money(order.total / self.rate(order.currency, order.placed_at))
 
+
+# Reference data
 
 def build_products(rng: random.Random) -> list[Product]:
     products = []
     for prefix, (category, names) in CATALOG.items():
-        numbers = rng.sample(range(1, 400), len(names))
-        for n, name in zip(sorted(numbers), names):
+        numbers = sorted(rng.sample(range(1, 400), len(names)))
+        for number, name in zip(numbers, names, strict=True):
             price = money(Decimal(rng.randint(400, 25000)) / 100)
-            products.append(Product(f"{prefix}-{n:04d}", name, category, price))
+            products.append(Product(f"{prefix}-{number:04d}", name, category, price))
     return products
 
 
-def build_customers(rng: random.Random, consumers: int = 260) -> list[Customer]:
+def build_consumers(rng: random.Random, n: int) -> list[Customer]:
     customers: list[Customer] = []
-    used_emails: set[str] = set()
-    pool = POS_COUNTRIES + WEB_COUNTRIES
-    while len(customers) < consumers:
+    emails: set[str] = set()
+    while len(customers) < n:
         first, last = rng.choice(FIRST), rng.choice(LAST)
-        local = f"{ascii_fold(first)}.{ascii_fold(last)}".lower()
-        email = f"{local}@{rng.choice(['gmail.com', 'siol.net', 'outlook.com', 'gmx.at', 'proton.me'])}"
-        if email in used_emails:
-            email = email.replace("@", f"{rng.randint(1, 99)}@")
-            if email in used_emails:
-                continue
-        used_emails.add(email)
-        customers.append(Customer(f"C{len(customers) + 1:04d}", f"{first} {last}", email, rng.choice(pool), False))
-    for i, base in enumerate(BUSINESSES):
-        country = rng.choice(["SI", "SI", "SI", "AT", "HR", "IT"])
-        domain = ascii_fold(base).lower().replace(" & ", "").replace(" ", "") + ".com"
-        customers.append(Customer(f"B{i + 1:03d}", f"{base} {SUFFIX[country]}", f"orders@{domain}", country, True))
+        email = f"{ascii_fold(first)}.{ascii_fold(last)}@{rng.choice(EMAIL_DOMAINS)}".lower()
+        if email in emails:
+            continue
+        emails.add(email)
+        country = rng.choice(POS_COUNTRIES + WEB_COUNTRIES)
+        customers.append(Customer(f"C{len(customers) + 1:04d}", f"{first} {last}", email, country, False))
+    return customers
+
+
+def build_businesses(rng: random.Random) -> list[Customer]:
+    customers = []
+    for i, base in enumerate(BUSINESSES, start=1):
+        country = rng.choice(BUSINESS_COUNTRIES)
+        domain = ascii_fold(base).lower().replace("&", "").replace(" ", "")
+        name = f"{base} {LEGAL_SUFFIX[country]}"
+        customers.append(Customer(f"B{i:03d}", name, f"orders@{domain}.com", country, True))
     return customers
 
 
 def build_fx(rng: random.Random) -> dict[tuple[int, str], Decimal]:
+    """A gentle monthly random walk from each base rate."""
     fx = {}
-    for cur, base in BASE_FX.items():
-        rate = base
+    for currency, rate in BASE_FX.items():
         for month in range(1, 13):
             rate = (rate * Decimal(1 + rng.uniform(-0.02, 0.02))).quantize(Decimal("0.0001"))
-            fx[(month, cur)] = rate
+            fx[(month, currency)] = rate
     return fx
 
 
-def random_moment(rng: random.Random, open_hour: int = 8, close_hour: int = 20) -> datetime:
-    day = datetime(YEAR, 1, 1) + timedelta(days=rng.randrange(365))
-    local = day.replace(hour=rng.randrange(open_hour, close_hour), minute=rng.randrange(60), tzinfo=LOCAL_TZ)
-    return local.astimezone(timezone.utc)
+# Orders
+
+def random_day(rng: random.Random) -> date:
+    return date(YEAR, 1, 1) + timedelta(days=rng.randrange(365))
 
 
-def price_in(world: World, product: Product, currency: str, when: datetime, wholesale: bool = False) -> Decimal:
-    price = product.price_eur * (WHOLESALE_DISCOUNT if wholesale else 1)
-    if currency != "EUR":
-        price *= world.fx[(when.astimezone(LOCAL_TZ).month, currency)]
-    return money(price)
+def local_moment(rng: random.Random, day: date, hours: tuple[int, int]) -> datetime:
+    """A random minute within opening hours on `day`, local time, returned as UTC."""
+    local = datetime(day.year, day.month, day.day, rng.randrange(*hours), rng.randrange(60), tzinfo=LOCAL_TZ)
+    return local.astimezone(UTC)
 
 
 def pick_lines(rng: random.Random, world: World, currency: str, when: datetime, n: int,
-               qty: tuple[int, int], wholesale: bool = False) -> list[Line]:
-    return [Line(p.sku, rng.randint(*qty), price_in(world, p, currency, when, wholesale))
+               qty: tuple[int, int], discount: Decimal = Decimal(1)) -> list[Line]:
+    rate = world.rate(currency, when)
+    return [Line(p.sku, rng.randint(*qty), money(p.price_eur * discount * rate))
             for p in rng.sample(world.products, n)]
 
 
-def build_world(seed: int = 7, pos_orders: int = 450, web_orders: int = 650, wholesale_orders: int = 120) -> World:
-    rng = random.Random(seed)
-    world = World(build_products(rng), build_customers(rng), {})
-    world.fx = build_fx(rng)
+def pos_orders(rng: random.Random, world: World, n: int) -> list[Order]:
+    regulars = [c for c in world.customers if not c.is_business and c.country in POS_COUNTRIES]
+    orders = []
+    for _ in range(n):
+        when = local_moment(rng, random_day(rng), SHOP_HOURS)
+        customer = None if rng.random() < WALK_IN_SHARE else rng.choice(regulars)
+        # Receipt numbers come later, once pickups are interleaved (see number_receipts).
+        lines = pick_lines(rng, world, "EUR", when, rng.randint(1, 3), (1, 3))
+        orders.append(Order("pos", "", customer, when, "EUR", lines))
+    return orders
 
+
+def web_orders(rng: random.Random, world: World, n: int) -> list[Order]:
     consumers = [c for c in world.customers if not c.is_business]
-    locals_ = [c for c in consumers if c.country in POS_COUNTRIES]
-    businesses = [c for c in world.customers if c.is_business]
-
-    for _ in range(pos_orders):
-        when = random_moment(rng)
-        # About a third of till sales are anonymous walk-ins. That's legitimate, not a defect.
-        customer = rng.choice(locals_) if rng.random() > 0.3 else None
-        world.orders.append(Order("pos", "", customer, when, "EUR",
-                                  pick_lines(rng, world, "EUR", when, rng.randint(1, 3), (1, 3))))
-
+    orders = []
     web_id = 100000
-    for _ in range(web_orders):
+    for _ in range(n):
         web_id += rng.randint(1, 7)
         customer = rng.choice(consumers)
         currency = CURRENCY_BY_COUNTRY.get(customer.country, "EUR")
-        when = random_moment(rng, 0, 24)
-        order = Order("web", str(web_id), customer, when, currency,
-                      pick_lines(rng, world, currency, when, rng.randint(1, 4), (1, 2)))
-        order.collect_in_store = customer.country == "SI" and currency == "EUR" and rng.random() < 0.12
-        world.orders.append(order)
-
-    for i in range(wholesale_orders):
-        when = random_moment(rng, 7, 16)
-        world.orders.append(Order("wholesale", f"WH-{i + 1:04d}", rng.choice(businesses), when, "EUR",
-                                  pick_lines(rng, world, "EUR", when, rng.randint(3, 8), (10, 120), wholesale=True)))
-
-    world.orders.sort(key=lambda o: o.placed_at)
-    number_receipts(rng, world)
-    return world
+        when = local_moment(rng, random_day(rng), ALL_DAY)
+        lines = pick_lines(rng, world, currency, when, rng.randint(1, 4), (1, 2))
+        order = Order("web", str(web_id), customer, when, currency, lines)
+        if customer.country == "SI" and rng.random() < PICKUP_SHARE:
+            pickup_day = when.astimezone(LOCAL_TZ).date() + timedelta(days=rng.randint(1, 3))
+            order.pickup_at = local_moment(rng, pickup_day, SHOP_HOURS)
+        orders.append(order)
+    return orders
 
 
-def pickup_time(order: Order) -> datetime:
-    """Click-and-collect orders get rung through the till when picked up, a day or so later."""
-    days = int(order.native_id) % 3 + 1
-    return order.placed_at + timedelta(days=days, hours=(int(order.native_id) % 5))
+def wholesale_orders(rng: random.Random, world: World, n: int) -> list[Order]:
+    businesses = [c for c in world.customers if c.is_business]
+    orders = []
+    for i in range(1, n + 1):
+        when = local_moment(rng, random_day(rng), WAREHOUSE_HOURS)
+        lines = pick_lines(rng, world, "EUR", when, rng.randint(3, 8), (10, 120), WHOLESALE_DISCOUNT)
+        orders.append(Order("wholesale", f"WH-{i:04d}", rng.choice(businesses), when, "EUR", lines))
+    return orders
 
 
-def number_receipts(rng: random.Random, world: World) -> None:
-    """Till receipt numbers run in time order across both walk-in sales and pickups."""
-    events = [(o.placed_at, o) for o in world.orders if o.channel == "pos"]
-    events += [(pickup_time(o), o) for o in world.orders if o.collect_in_store]
+def number_receipts(rng: random.Random, orders: list[Order]) -> None:
+    """Till receipt numbers run in time order across walk-in sales and pickups alike."""
+    visits = [(o.placed_at, o) for o in orders if o.channel == "pos"]
+    visits += [(o.pickup_at, o) for o in orders if o.pickup_at]
     receipt = 1000
-    for _, order in sorted(events, key=lambda e: e[0]):
+    for _, order in sorted(visits, key=lambda v: v[0]):
         receipt += rng.randint(1, 3)
         if order.channel == "pos":
             order.native_id = f"R-{receipt}"
         else:
             order.pos_receipt = f"R-{receipt}"
+
+
+def build_world(seed: int = 7, n_pos: int = 450, n_web: int = 650, n_wholesale: int = 120) -> World:
+    rng = random.Random(seed)
+    customers = build_consumers(rng, 260) + build_businesses(rng)
+    world = World(build_products(rng), customers, build_fx(rng))
+    world.orders = (pos_orders(rng, world, n_pos)
+                    + web_orders(rng, world, n_web)
+                    + wholesale_orders(rng, world, n_wholesale))
+    world.orders.sort(key=lambda o: o.placed_at)
+    number_receipts(rng, world.orders)
+    return world
