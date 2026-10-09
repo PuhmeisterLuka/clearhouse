@@ -1,5 +1,3 @@
-import csv
-import json
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -7,12 +5,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from clearhouse.generate.mess import generate
-from clearhouse.generate.truth import build_world
-from clearhouse.ingest import ingest_dir
 from clearhouse.ingest.records import RawLine, RawOrder
 from clearhouse.issues import Issue
-from clearhouse.parse import BUSINESS_TZ, parse_order, parse_orders
+from clearhouse.parse import BUSINESS_TZ, parse_order
 from clearhouse.parse.fields import (
     FieldError,
     parse_amount,
@@ -155,71 +150,32 @@ ERRORS = {"bad_date": {"placed_at.invalid", "placed_at.missing"}, "missing_sku":
 REPAIRS = {"sku_variant": "sku.repaired", "email_noise": "customer_email.repaired",
            "mojibake": "customer_name.repaired", "qty_text": "qty.repaired",
            "buyer_code_noise": "customer_code.repaired"}
-HARMLESS_HERE = set(REPAIRS) | {"euro_price_variant"}  # parsing alone must recover the true values
+RECOVERABLE = set(REPAIRS) | {"euro_price_variant"}  # parsing alone must recover the true values
 
 
-def read_csv(path):
-    with path.open(encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+@pytest.fixture(scope="module")
+def parsed(truth):
+    return truth.parse()
 
 
-@pytest.fixture(scope="module", params=[3, 11])
-def run(request, tmp_path_factory):
-    data = tmp_path_factory.mktemp(f"seed{request.param}")
-    generate(data, build_world(seed=request.param), seed=request.param)
-    results, _ = ingest_dir(data / "raw")
-    orders = parse_orders(o for r in results for o in r.orders)
-
-    kinds = defaultdict(set)
-    for row in map(json.loads, (data / "truth/defects.jsonl").open()):
-        kinds[row["order_key"]].add(row["kind"])
-    truth = {row["order_key"]: row for row in read_csv(data / "truth/orders.csv")}
-    lines = defaultdict(list)
-    for row in read_csv(data / "truth/lines.csv"):
-        lines[row["order_key"]].append((row["sku"], int(row["qty"]), Decimal(row["unit_price"])))
-    crm = {row["customer_id"]: row for row in read_csv(data / "reference/crm_customers.csv")}
-    return orders, kinds, truth, lines, crm
-
-
-def test_every_parse_level_defect_is_reported_with_the_right_code(run):
-    orders, kinds, *_ = run
+def test_every_parse_level_defect_is_reported_with_the_right_code(truth, parsed):
     codes = defaultdict(set)
-    for o in orders:
+    for o in parsed:
         codes[o.order_ref] |= {i.code for i in o.issues}
-    for key, ks in kinds.items():
-        for kind in ks & set(ERRORS):
+    for key, kinds in truth.kinds.items():
+        for kind in kinds & set(ERRORS):
             assert codes[key] & ERRORS[kind], (key, kind)
-        for kind in ks & set(REPAIRS):
+        for kind in kinds & set(REPAIRS):
             assert REPAIRS[kind] in codes[key], (key, kind)
 
 
-def test_no_order_is_rejected_without_a_reason(run):
-    orders, kinds, *_ = run
-    for o in orders:
+def test_no_order_is_rejected_without_a_reason(truth, parsed):
+    for o in parsed:
         if o.has_errors:
-            assert kinds[o.order_ref] & set(ERRORS), o.order_ref
+            assert truth.kinds[o.order_ref] & set(ERRORS), o.order_ref
 
 
-def test_parsed_values_equal_the_truth(run):
-    orders, kinds, truth, lines, crm = run
-    checked = 0
-    for o in orders:
-        t = truth.get(o.order_ref)
-        if t is None or not kinds[o.order_ref] <= HARMLESS_HERE:
-            continue  # till copies of web orders, or defects later stages handle
-        checked += 1
-        true_moment = datetime.fromisoformat(t["placed_at_utc"])
-        assert [(ln.sku, ln.qty, ln.unit_price) for ln in o.lines] == lines[o.order_ref]
-        assert o.total == Decimal(t["total"])
-        assert o.placed_date == true_moment.astimezone(BUSINESS_TZ).date()
-        if o.source != "wholesale":
-            assert o.placed_at == true_moment
-
-        customer = crm.get(t["customer_id"])
-        if o.source == "wholesale":
-            assert o.customer_code == t["customer_id"]
-        elif customer is None:
-            assert o.customer_email is None  # walk-in sale at the till
-        else:
-            assert (o.customer_email, o.customer_name) == (customer["email"], customer["name"])
-    assert checked > 1000
+def test_parsed_values_equal_the_truth(truth, parsed):
+    comparable = truth.comparable(parsed, RECOVERABLE)
+    for order in comparable:
+        truth.assert_matches(order)

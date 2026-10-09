@@ -26,7 +26,7 @@ Each stage looks at a wider scope than the one before: one value, then one order
 
 1. **Ingest.** One adapter per format, each producing the same raw record shape with lineage (file, row or element, raw value). Encoding detection, preamble skipping, nested-JSON flattening.
 2. **Parse.** Validate and clean every value in one pass. Each field goes through a reusable parser that either returns a typed value, logging any repair (SKU formats, emails, mojibake, text quantities, buyer codes), or rejects it. Number formats, time zones and cents are read according to each source's format.
-3. **Check.** Rules that need the whole order or the reference data: known SKUs, plausible quantities, dates inside the export period, header totals against line sums, 100x price errors against the catalog, a currency inferred from the customer's country when it's missing.
+3. **Check.** Rules that need the whole order or the reference data: known SKUs, positive quantities, no dates in the future, a currency inferred from the customer's country when it's missing, 100x price slips against the catalog, repeated rows, and header totals against line sums.
 4. **Reconcile.** Dedupe exact repeats and webhook retries, match till pickups to web orders (by reference, then fuzzily by customer, items and timing), resolve customers against the CRM, convert to EUR.
 5. **Report.** Clean tables (orders, lines, customers), a quarantine file with reasons, an issue log, and an HTML data-quality report.
 6. **Score.** Compare the pipeline's output with the ground truth and ledger: defect detection rates per kind, false quarantines, and value accuracy.
@@ -45,7 +45,7 @@ This writes `data/raw`, `data/reference` and `data/truth`. The pipeline must nev
 uv run clearhouse run
 ```
 
-Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/parsed_orders.jsonl` and `out/issues.csv`.
+Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/orders.jsonl` and `out/issues.csv`. Orders dated after `--as-of` (default: today) are rejected as impossible.
 
 ## Development
 
@@ -73,12 +73,20 @@ Parsing only fixes what can be fixed without guessing. `brk_42` is unambiguously
 
 The tests compare parsed values against the ground truth for every order whose defects parsing alone should recover, on two different seeds. That comparison found a real bug while this stage was being built: `Š` in UTF-8 is the bytes `C5 A0`, and `A0` in Windows-1252 is a non-breaking space, so tidying whitespace before undoing mojibake turned `Å\xa0pela` into an unrecoverable `Å pela`.
 
+## How checks work
+
+[`check.py`](src/clearhouse/check.py) runs two kinds of rule. Validations (future dates, unknown SKUs, quantities below 1) only report, and run on every order so the issue log lists every problem at once. Repairs change the order, and stop as soon as it has an error. An order headed for quarantine isn't worth repairing, and repairing it can do harm: an early version "fixed" the totals of orders with negative quantities, quietly rewriting them from numbers already known to be wrong.
+
+Repairs run in a fixed order because each one makes the next more reliable. Prices are compared with the catalog in euros, using that month's exchange rate, and a price around 100 times the list price is read as cents. Only then are repeated lines judged. A repeat on its own proves nothing, since someone can buy the same part twice on separate lines, so it's only dropped when the order's own header total excludes it. Last, the header total is compared with the sum of the lines, and the lines win because they're the more detailed record.
+
+The tests check that the orders rejected after this stage are exactly the ones the ledger says should be quarantined, with no misses and no false alarms, and that every recoverable order matches the ground truth field for field.
+
 ## Build log
 
 - [x] Step 1: ground-truth world and messy data generator with defect ledger
 - [x] Step 2: ingestion adapters
 - [x] Step 3: field parsing (validate and clean each value)
-- [ ] Step 4: order checks against reference data
+- [x] Step 4: order checks against reference data
 - [ ] Step 5: reconciliation
 - [ ] Step 6: report and scoring
 - [ ] Step 7: CI and polish

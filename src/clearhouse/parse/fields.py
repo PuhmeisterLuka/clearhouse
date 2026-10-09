@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-CENT = Decimal("0.01")
+from ..money import CENT
 
 AMOUNT = re.compile(r"^-?\d+(\.\d+)?$")
 QUANTITY = re.compile(r"^\s*(-?\d+)\s*(pcs|pc|x|kos)?\s*$", re.IGNORECASE)

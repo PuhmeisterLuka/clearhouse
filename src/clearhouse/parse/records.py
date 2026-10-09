@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
-from ..issues import Issue
+from ..issues import Issue, Severity
+from ..money import money
 
 
 @dataclass
@@ -15,6 +17,12 @@ class ParsedLine:
     qty: int | None
     unit_price: Decimal | None
     locator: str
+
+    @property
+    def total(self) -> Decimal | None:
+        if self.unit_price is None or self.qty is None:
+            return None
+        return money(self.unit_price * self.qty)
 
 
 @dataclass
@@ -43,3 +51,8 @@ class ParsedOrder:
     @property
     def has_errors(self) -> bool:
         return any(i.severity == "error" for i in self.issues)
+
+    def log(self, stage: str, severity: Severity, code: str, message: str,
+            locator: str | None = None, value: Any = None) -> None:
+        self.issues.append(Issue(stage, severity, code, message, self.source, locator or self.locator,
+                                 self.order_ref, None if value is None else str(value)))

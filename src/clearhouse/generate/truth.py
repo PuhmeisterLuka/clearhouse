@@ -8,12 +8,12 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from ..money import money
 from ..text import ascii_fold
 
-CENT = Decimal("0.01")
 LOCAL_TZ = ZoneInfo("Europe/Ljubljana")
 YEAR = 2025
 
@@ -57,10 +57,6 @@ POS_COUNTRIES = ["SI"] * 8 + ["AT", "HR"]
 WEB_COUNTRIES = ["SI"] * 4 + ["AT"] * 2 + ["HR", "DE", "IT", "GB", "GB", "US", "US"]
 CURRENCY_BY_COUNTRY = {"GB": "GBP", "US": "USD"}
 BASE_FX = {"USD": Decimal("1.08"), "GBP": Decimal("0.85")}
-
-
-def money(x: Decimal | int | str) -> Decimal:
-    return Decimal(x).quantize(CENT, ROUND_HALF_UP)
 
 
 @dataclass(frozen=True)
