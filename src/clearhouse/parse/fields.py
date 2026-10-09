@@ -21,6 +21,7 @@ SKU = re.compile(r"^([A-Z]{3})[-_ ]?(\d{1,4})$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$")
 CUSTOMER_CODE = re.compile(r"^([BC])[-\s]?(\d{3,4})$")
 EPOCH_MS = re.compile(r"^\d{13}$")
+EXAMPLE_MOMENT = datetime(2025, 12, 31, 14, 30)  # shows a date format in error messages
 
 
 class FieldError(ValueError):
@@ -130,7 +131,7 @@ def parse_local_datetime(raw: str, *, fmt: str, tz: ZoneInfo) -> Parsed[datetime
     try:
         local = datetime.strptime(raw.strip(), fmt)
     except ValueError as e:
-        raise FieldError(f"not a date in the form {fmt}") from e
+        raise FieldError(f"not a date like {EXAMPLE_MOMENT:{fmt}}") from e
     return Parsed(local.replace(tzinfo=tz).astimezone(UTC))
 
 
@@ -152,4 +153,4 @@ def parse_date(raw: str, *, fmt: str) -> Parsed[date]:
     try:
         return Parsed(datetime.strptime(raw.strip(), fmt).date())
     except ValueError as e:
-        raise FieldError(f"not a date in the form {fmt}") from e
+        raise FieldError(f"not a date like {EXAMPLE_MOMENT:{fmt}}") from e

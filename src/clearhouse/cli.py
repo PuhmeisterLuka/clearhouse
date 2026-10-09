@@ -1,71 +1,72 @@
 import argparse
+import sys
 from collections import Counter
-from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
-from .check import CheckContext, check_orders
-from .files import write_csv, write_jsonl
-from .generate.mess import generate
+from .export import write_tables
+from .generate.mess import DEFAULT_DEFECT_RATE, generate
 from .generate.truth import build_world
-from .ingest import ingest_dir
 from .ingest.records import SourceResult
 from .issues import Issue
-from .model import Order
-from .parse import parse_orders
-from .reconcile import reconcile
-from .reference import load_reference
-
-ISSUE_COLUMNS = ["stage", "severity", "code", "source", "order_ref", "locator", "value", "message"]
+from .pipeline import Run, run_pipeline
+from .report import render_report
+from .score import Output, Truth, render, score
 
 
-def print_sources(results: list[SourceResult]) -> None:
+def print_sources(sources: list[SourceResult]) -> None:
     print(f"{'source':<10} {'file':<28} {'encoding':<9} {'orders':>6} {'lines':>6}")
-    for r in results:
+    for r in sources:
         s = r.stats
         print(f"{s.source:<10} {s.file:<28} {s.encoding:<9} {s.orders:>6} {s.lines:>6}")
 
 
-def print_order_summary(orders: list[Order]) -> None:
-    status = Counter(o.status for o in orders)
-    repairs = sum(i.severity == "warning" for o in orders for i in o.issues)
-    print(f"\n{len(orders)} records: {status['clean']} clean orders, {status['quarantined']} quarantined, "
-          f"{status['duplicate']} duplicate copies; {repairs} repairs")
+def print_run_summary(run: Run) -> None:
+    status = Counter(o.status for o in run.orders)
+    print(f"\n{len(run.orders)} records: {status['clean']} clean orders, {status['quarantined']} quarantined, "
+          f"{status['duplicate']} duplicate copies; {len(run.repairs())} values repaired")
 
 
 def print_issue_counts(issues: list[Issue]) -> None:
     counts = Counter((i.stage, i.severity, i.code) for i in issues)
     print()
     for (stage, severity, code), n in sorted(counts.items()):
-        print(f"  {stage:<7} {severity:<8} {code:<28} {n:>4}")
+        print(f"  {stage:<9} {severity:<8} {code:<28} {n:>4}")
+
+
+def share(text: str) -> float:
+    value = float(text)
+    if not 0 <= value <= 1:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return value
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
     world = build_world(seed=args.seed)
-    ledger = generate(Path(args.data), world, seed=args.seed)
+    ledger = generate(Path(args.data), world, seed=args.seed, defect_rate=args.defect_rate)
     print(f"{len(world.orders)} true orders, {len(ledger.rows)} defects injected into {args.data}/raw")
     for expected, n in sorted(Counter(r["expected"] for r in ledger.rows).items()):
         print(f"  {expected:<11} {n}")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    data = Path(args.data)
-    results, unclaimed = ingest_dir(data / "raw")
-    orders = parse_orders(order for r in results for order in r.orders)
-    reference = load_reference(data / "reference")
-    check_orders(orders, CheckContext(reference, args.as_of))
-    reconcile(orders, reference)
-
-    file_issues = unclaimed + [i for r in results for i in r.issues]
-    issues = file_issues + [i for o in orders for i in o.issues]
+    run = run_pipeline(Path(args.data), args.as_of)
     out = Path(args.out)
-    write_jsonl(out / "orders.jsonl", ({**asdict(o), "status": o.status} for o in orders))
-    write_csv(out / "issues.csv", ISSUE_COLUMNS, ([getattr(i, c) for c in ISSUE_COLUMNS] for i in issues))
+    write_tables(out, run)
+    (out / "report.html").write_text(render_report(run), encoding="utf-8")
+    print_sources(run.sources)
+    print_run_summary(run)
+    print_issue_counts(run.issues)
+    print(f"\nwritten to {out}/: report.html, and orders, lines, customers, quarantine, duplicates and issues "
+          "as CSV")
 
-    print_sources(results)
-    print_order_summary(orders)
-    print_issue_counts(issues)
-    print(f"\nwritten to {out}/: orders.jsonl, issues.csv")
+
+def cmd_score(args: argparse.Namespace) -> None:
+    result = score(Truth.load(Path(args.data)), Output.load(Path(args.out)))
+    text = render(result)
+    (Path(args.out) / "score.md").write_text(text, encoding="utf-8")
+    print(text)
+    sys.exit(1 if result.problems() else 0)
 
 
 def main() -> None:
@@ -75,14 +76,21 @@ def main() -> None:
     gen = sub.add_parser("generate", help="build the messy source files and their ground truth")
     gen.add_argument("--data", default="data")
     gen.add_argument("--seed", type=int, default=7)
+    gen.add_argument("--defect-rate", type=share, default=DEFAULT_DEFECT_RATE,
+                     help=f"share of orders that get a defect, 0 to 1 (default: {DEFAULT_DEFECT_RATE})")
     gen.set_defaults(func=cmd_generate)
 
-    run = sub.add_parser("run", help="run the pipeline over data/raw")
+    run = sub.add_parser("run", help="run the pipeline over data/raw and write its outputs")
     run.add_argument("--data", default="data")
     run.add_argument("--out", default="out")
     run.add_argument("--as-of", type=date.fromisoformat, default=date.today(),
                      help="latest plausible order date, YYYY-MM-DD (default: today)")
     run.set_defaults(func=cmd_run)
+
+    grade = sub.add_parser("score", help="grade a run's outputs against the generator's ground truth")
+    grade.add_argument("--data", default="data")
+    grade.add_argument("--out", default="out")
+    grade.set_defaults(func=cmd_score)
 
     args = parser.parse_args()
     args.func(args)

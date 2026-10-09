@@ -1,54 +1,38 @@
 """A generated dataset plus its ground truth, shared by the stage tests."""
 
-import csv
-import json
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 
+from clearhouse import score
 from clearhouse.generate.mess import generate
 from clearhouse.generate.truth import build_world
 from clearhouse.ingest import ingest_dir
 from clearhouse.model import Order
-from clearhouse.parse import BUSINESS_TZ, parse_orders
-
-
-def read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
+from clearhouse.parse import parse_orders
 
 
 @dataclass
-class Truth:
-    data: Path
-    ledger: list[dict]  # every injected defect
-    kinds: dict[str, set[str]]  # order key -> defect kinds injected into it
-    orders: dict[str, dict[str, str]]
-    lines: dict[str, list[tuple[str, int, Decimal]]]
-    crm: dict[str, dict[str, str]]
-    as_of: date = date(2026, 1, 3)  # the day the exports were generated
+class Truth(score.Truth):
+    """The scorer's view of the truth, plus what the stage tests need to hold in-memory orders against it."""
 
-    @classmethod
-    def load(cls, data: Path) -> "Truth":
-        ledger = [json.loads(line) for line in (data / "truth/defects.jsonl").open()]
-        kinds = defaultdict(set)
-        for row in ledger:
-            kinds[row["order_key"]].add(row["kind"])
-        lines = defaultdict(list)
-        for row in read_csv(data / "truth/lines.csv"):
-            lines[row["order_key"]].append((row["sku"], int(row["qty"]), Decimal(row["unit_price"])))
-        return cls(data, ledger, kinds,
-                   {row["order_key"]: row for row in read_csv(data / "truth/orders.csv")},
-                   lines,
-                   {row["customer_id"]: row for row in read_csv(data / "reference/crm_customers.csv")})
+    as_of: date = date(2026, 1, 3)  # the day the exports were generated
 
     def parse(self) -> list[Order]:
         results, _ = ingest_dir(self.data / "raw")
         return parse_orders(order for r in results for order in r.orders)
+
+    def assert_detected(self, orders: list[Order], kinds: set[str]) -> None:
+        """Every injected defect of these kinds shows on its order with one of the codes that signal it."""
+        codes = defaultdict(set)
+        for o in orders:
+            codes[o.order_ref] |= {i.code for i in o.issues}
+        for defect in self.ledger:
+            if defect["kind"] in kinds:
+                assert codes[defect["order_key"]] & score.SIGNALS[defect["kind"]], defect
 
     def comparable(self, orders: list[Order], recoverable: set[str]) -> list[Order]:
         """Orders whose defects are all ones the stage should have undone. Fails if any such order is missing."""
@@ -59,12 +43,11 @@ class Truth:
 
     def assert_matches(self, order: Order) -> None:
         t = self.orders[order.order_ref]
-        moment = datetime.fromisoformat(t["placed_at_utc"])
         assert [(ln.sku, ln.qty, ln.unit_price) for ln in order.lines] == self.lines[order.order_ref]
         assert (order.total, order.currency) == (Decimal(t["total"]), t["currency"])
-        assert order.placed_date == moment.astimezone(BUSINESS_TZ).date()
+        assert str(order.placed_date) == t["placed_date"]
         if order.source != "wholesale":
-            assert order.placed_at == moment
+            assert order.placed_at == datetime.fromisoformat(t["placed_at_utc"])
 
         customer = self.crm.get(t["customer_id"])
         if order.source == "wholesale":

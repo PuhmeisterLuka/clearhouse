@@ -10,11 +10,15 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from .issues import Issue
 from .model import Order
 from .money import money
 from .reference import Reference
 
 STAGE = "reconcile"
+REPEAT = "order.repeat"
+PICKUP_COPY = "order.pickup_copy"
+COPY_CODES = {REPEAT, PICKUP_COPY}  # the issue that marks a record as a copy carries one of these
 PICKUP_WINDOW = timedelta(days=7)  # how long the shop holds a click-and-collect order
 
 
@@ -32,6 +36,11 @@ def same_record(a: Order, b: Order) -> bool:
     stamp_a = (a.placed_at, a.placed_date, a.customer_code)
     stamp_b = (b.placed_at, b.placed_date, b.customer_code)
     return same_sale(a, b) and stamp_a == stamp_b
+
+
+def copy_issue(order: Order) -> Issue:
+    """The issue that marked this record as a copy, which says how the copy was found."""
+    return next(i for i in order.issues if i.code in COPY_CODES)
 
 
 def mark_copy(copy: Order, original: Order, code: str, message: str) -> None:
@@ -70,11 +79,11 @@ def drop_repeats(orders: list[Order]) -> None:
         if original is order:
             continue
         if same_record(order, original):
-            mark_copy(order, original, "order.repeat", f"exact repeat of the record at {original.locator}")
+            mark_copy(order, original, REPEAT, f"exact repeat of the record at {original.locator}")
         else:
             original.log(STAGE, "error", "order.conflicting_copies",
                          f"the record at {order.locator} has the same id but different contents")
-            mark_copy(order, original, "order.repeat", f"same id as {original.locator}, but the contents differ")
+            mark_copy(order, original, REPEAT, f"same id as {original.locator}, but the contents differ")
 
 
 def within_pickup_window(receipt: Order, web: Order) -> bool:
@@ -93,7 +102,7 @@ def match_by_ref(receipt: Order, waiting: dict[str, Order]) -> None:
                     value=receipt.ref)
     else:
         del waiting[web.native_id]
-        mark_copy(receipt, web, "order.pickup_copy", f"till copy of {web.order_ref}, matched by its Ref")
+        mark_copy(receipt, web, PICKUP_COPY, f"till copy of {web.order_ref}, matched by its Ref")
 
 
 def match_by_sale(receipt: Order, waiting: dict[str, Order]) -> None:
@@ -101,7 +110,7 @@ def match_by_sale(receipt: Order, waiting: dict[str, Order]) -> None:
     if len(candidates) == 1:
         web = candidates[0]
         del waiting[web.native_id]
-        mark_copy(receipt, web, "order.pickup_copy",
+        mark_copy(receipt, web, PICKUP_COPY,
                   f"till copy of {web.order_ref}, matched by customer, items and timing (no Ref)")
     elif candidates:
         refs = ", ".join(web.order_ref for web in candidates)

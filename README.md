@@ -2,6 +2,53 @@
 
 A data pipeline that takes order exports from three systems that disagree about everything, works out what actually happened, and proves how well it did.
 
+![The HTML data-quality report the pipeline writes](docs/report.jpg)
+
+## Results
+
+On the default dataset the pipeline reads 1,283 records from three files. It finishes with 1,143 clean orders, 77 in quarantine and 63 duplicate copies removed, after repairing 127 values. `clearhouse score` then grades that output against the ground truth:
+
+| Check | Result |
+|---|---|
+| True orders given the right outcome, clean or quarantined | 1220 / 1220 |
+| True orders lost | 0 |
+| Orders counted more than once | 0 |
+| Output records that aren't real orders | 0 |
+| Duplicate copies removed and paired with their original | 63 / 63 |
+| Records wrongly removed as copies | 0 |
+| Injected defects handled as expected | 268 / 268 |
+| Errors and warnings with no defect behind them | 0 |
+| Fields on clean orders matching the truth | 8001 / 8001 |
+| Clean revenue in EUR, reported vs true | €4,636,645.45 vs €4,636,645.45 |
+
+<details>
+<summary>Score by defect kind</summary>
+
+| Defect | Expected handling | Injected | Handled |
+|---|---|--:|--:|
+| `bad_date` | quarantine | 9 | 9 |
+| `buyer_code_noise` | fix | 6 | 6 |
+| `cross_channel_duplicate` | dedupe | 47 | 47 |
+| `duplicate_order` | dedupe | 16 | 16 |
+| `duplicate_row` | dedupe | 12 | 12 |
+| `email_noise` | fix | 20 | 20 |
+| `euro_price_variant` | fix | 1 | 1 |
+| `future_date` | quarantine | 12 | 12 |
+| `missing_currency` | fix | 7 | 7 |
+| `missing_sku` | quarantine | 12 | 12 |
+| `mojibake` | fix | 10 | 10 |
+| `name_variant` | fix | 7 | 7 |
+| `negative_qty` | quarantine | 11 | 11 |
+| `price_cents_error` | fix | 18 | 18 |
+| `qty_text` | fix | 8 | 8 |
+| `sku_variant` | fix | 17 | 17 |
+| `total_mismatch` | fix | 22 | 22 |
+| `unknown_sku` | quarantine | 33 | 33 |
+
+</details>
+
+A perfect score on data the pipeline was built against proves less than it sounds, so it's backed up three ways. The tests sabotage a correct run's output in seven different ways and check that the scorer names each problem. The score was also perfect on 30 seeds the pipeline was never developed against, and on 15 more with `--defect-rate 0.8`, four times the default density. The test suite reruns one of those dense datasets every time.
+
 ## The scenario
 
 Velo Supply is a (fictional) Slovenian bike-parts distributor with three sales channels, each exporting orders its own way:
@@ -18,7 +65,7 @@ Alongside the raw files there is reference data: a product catalog, a CRM custom
 
 ## Why synthetic data
 
-The generator builds a clean "true" world first, then writes the messy exports from it and records every defect it injects in a ledger. Each ledger entry says what a correct pipeline should do: **fix** it, **quarantine** the order, or **dedupe** a copy. That makes the pipeline measurable. Instead of "the output looks clean", the report can say how many defects were caught, how many good orders were wrongly rejected, and whether every surviving order total matches the truth to the cent.
+The generator builds a clean "true" world first, then writes the messy exports from it and records every defect it injects in a ledger. Each ledger entry says what a correct pipeline should do: **fix** it, **quarantine** the order, or **dedupe** a copy. That makes the pipeline measurable. Instead of "the output looks clean", the scorer can say how many defects were caught, how many good orders were wrongly rejected, and whether every surviving order total matches the truth to the cent.
 
 ## Pipeline stages
 
@@ -28,8 +75,8 @@ Each stage looks at a wider scope than the one before: one value, then one order
 2. **Parse.** Validate and clean every value in one pass. Each field goes through a reusable parser that either returns a typed value, logging any repair (SKU formats, emails, mojibake, text quantities, buyer codes), or rejects it. Number formats, time zones and cents are read according to each source's format.
 3. **Check.** Rules that need the whole order or the reference data: known SKUs, positive quantities, no dates in the future, a currency inferred from the customer's country when it's missing, 100x price slips against the catalog, repeated rows, and header totals against line sums.
 4. **Reconcile.** Resolve every customer against the CRM, drop repeated records such as webhook retries, match till pickups to their web orders (by reference, then by customer, items and timing), and convert every total to EUR. Each record ends up with one status: clean, quarantined, or a duplicate copy of another record.
-5. **Report.** Clean tables (orders, lines, customers), a quarantine file with reasons, an issue log, and an HTML data-quality report.
-6. **Score.** Compare the pipeline's output with the ground truth and ledger: defect detection rates per kind, false quarantines, and value accuracy.
+5. **Report.** Clean tables (`orders`, `lines`, `customers`), `quarantine.csv` with every reason, `duplicates.csv` with what each copy duplicates and how it was found, the full `issues.csv`, and an HTML data-quality report.
+6. **Score.** A separate command that reads only the output files and the ground truth, never pipeline code, and grades the run. It checks the outcome of every true order, every copy and every injected defect, and also catches false alarms, field-level errors and revenue drift.
 
 Every issue carries a severity. An **error** means the order can't be trusted and goes to quarantine, a **warning** means something was repaired, and **info** is worth knowing but needs no action. Issues about an order travel with that order through every stage, so the final quarantine decision can see all of them.
 
@@ -39,13 +86,19 @@ Every issue carries a severity. An **error** means the order can't be trusted an
 uv run clearhouse generate
 ```
 
-This writes `data/raw`, `data/reference` and `data/truth`. The pipeline must never read `data/truth`; only the scorer does.
+This writes `data/raw`, `data/reference` and `data/truth`. The pipeline must never read `data/truth`; only the scorer does. `--seed` picks another dataset, and `--defect-rate` (default 0.2) sets the share of orders that get a defect.
 
 ```bash
 uv run clearhouse run
 ```
 
-Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/orders.jsonl` (every record with its final status) and `out/issues.csv`. Orders dated after `--as-of` (default: today) are rejected as impossible.
+Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/report.html` plus the CSV tables. Orders dated after `--as-of` (default: today) are rejected as impossible.
+
+```bash
+uv run clearhouse score
+```
+
+Grades `out/` against `data/truth`, prints the result and saves it to `out/score.md`. It exits with status 1 if anything is wrong, so it can gate CI.
 
 ## Development
 
@@ -93,6 +146,18 @@ Click-and-collect orders are recorded twice: once by the webshop when they're pl
 
 The tests check the whole pipeline end to end: the copies it drops are exactly the ledger's duplicates, paired with the right originals, and every true order survives exactly once with the outcome the ledger expects. Every clean order matches the ground truth down to its CRM customer and its euro total. Breaking the matcher on purpose (skipping the no-`Ref` pass, shrinking the pickup window, keeping typed names) makes those tests fail.
 
+## How scoring works
+
+[`score.py`](src/clearhouse/score.py) reads files only, so it judges what the pipeline delivered rather than how. It checks five things:
+
+- **Outcomes.** Every true order must appear exactly once, clean or quarantined as the ledger expects. Lost orders, orders counted twice, and output records that aren't real orders are each counted separately.
+- **Copies.** Every duplicate record must be removed and paired with the right original.
+- **Defects.** Each injected defect must be noticed with an issue code that signals its kind, then treated right. A defect that should quarantine leaves its order in quarantine. One that should be fixed leaves the order clean, with every field equal to the truth.
+- **False alarms.** Any error or warning on an order with no defect behind it counts against the run. Without this check, a pipeline that flagged everything would look thorough.
+- **Fields.** Every clean order is compared with the truth on its date and time, customer, currency, total, euro total and every line, and the clean revenue has to match to the cent.
+
+A scorer that always says "perfect" is worthless, so the tests take a correct run's output and break it in seven ways: losing a quarantined order, counting an order twice, inventing an order, dropping a duplicate pairing, changing a euro total, deleting the evidence of a repair, and raising a warning nothing explains. Each time, the scorer has to name the problem.
+
 ## Build log
 
 - [x] Step 1: ground-truth world and messy data generator with defect ledger
@@ -100,5 +165,5 @@ The tests check the whole pipeline end to end: the copies it drops are exactly t
 - [x] Step 3: field parsing (validate and clean each value)
 - [x] Step 4: order checks against reference data
 - [x] Step 5: reconciliation
-- [ ] Step 6: report and scoring
+- [x] Step 6: report and scoring
 - [ ] Step 7: CI and polish

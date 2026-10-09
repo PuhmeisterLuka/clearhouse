@@ -4,9 +4,9 @@ from decimal import Decimal
 import pytest
 from builders import make_line, make_order
 
-from clearhouse.check import CheckContext, check_orders
-from clearhouse.reconcile import convert_to_eur, drop_repeats, match_pickups, reconcile, resolve_customers
-from clearhouse.reference import CrmCustomer, Reference, load_reference
+from clearhouse.pipeline import run_pipeline
+from clearhouse.reconcile import convert_to_eur, drop_repeats, match_pickups, resolve_customers
+from clearhouse.reference import CrmCustomer, Reference
 
 REFERENCE = Reference(
     list_prices={},
@@ -122,21 +122,11 @@ def test_totals_are_converted_at_that_months_rate():
 
 @pytest.fixture(scope="module")
 def orders(truth):
-    reference = load_reference(truth.data / "reference")
-    orders = truth.parse()
-    check_orders(orders, CheckContext(reference, truth.as_of))
-    reconcile(orders, reference)
-    return orders
+    return run_pipeline(truth.data, truth.as_of).orders
 
 
 def test_copies_are_exactly_the_ledgers_duplicates(truth, orders):
-    expected = set()
-    for row in truth.ledger:
-        if row["kind"] == "duplicate_order":
-            expected.add((row["order_key"], row["order_key"]))
-        elif row["kind"] == "cross_channel_duplicate":
-            expected.add((f"pos:{row['copy_id']}", row["order_key"]))
-    assert {(o.order_ref, o.duplicate_of) for o in orders if o.duplicate_of} == expected
+    assert {(o.order_ref, o.duplicate_of) for o in orders if o.duplicate_of} == truth.expected_copies()
 
 
 def test_every_true_order_survives_exactly_once_with_the_right_outcome(truth, orders):

@@ -97,11 +97,9 @@ def test_orders_with_errors_are_not_repaired():
 
 # Against the generated data and its ground truth
 
-ERRORS = {"future_date": "placed_at.future", "negative_qty": "qty.not_positive", "unknown_sku": "sku.unknown"}
-REPAIRS = {"missing_currency": "currency.inferred", "duplicate_row": "lines.duplicate",
-           "total_mismatch": "total.mismatch", "price_cents_error": "unit_price.cents"}
-RECOVERABLE = set(REPAIRS) | {"sku_variant", "email_noise", "mojibake", "qty_text", "buyer_code_noise",
-                              "euro_price_variant"}
+QUARANTINES = {"future_date", "negative_qty", "unknown_sku"}
+REPAIRS = {"missing_currency", "duplicate_row", "total_mismatch", "price_cents_error"}
+RECOVERABLE = REPAIRS | {"sku_variant", "email_noise", "mojibake", "qty_text", "buyer_code_noise", "euro_price_variant"}
 
 
 @pytest.fixture(scope="module")
@@ -112,12 +110,7 @@ def orders(truth):
 
 
 def test_every_check_level_defect_is_reported_with_the_right_code(truth, orders):
-    codes = {}
-    for o in orders:
-        codes.setdefault(o.order_ref, set()).update(i.code for i in o.issues)
-    for key, kinds in truth.kinds.items():
-        for kind in kinds & (set(ERRORS) | set(REPAIRS)):
-            assert {**ERRORS, **REPAIRS}[kind] in codes[key], (key, kind)
+    truth.assert_detected(orders, QUARANTINES | REPAIRS)
 
 
 def test_rejected_orders_are_exactly_the_ones_the_ledger_quarantines(truth, orders):
@@ -127,6 +120,5 @@ def test_rejected_orders_are_exactly_the_ones_the_ledger_quarantines(truth, orde
 
 
 def test_checked_values_equal_the_truth(truth, orders):
-    comparable = truth.comparable(orders, RECOVERABLE)
-    for order in comparable:
+    for order in truth.comparable(orders, RECOVERABLE):
         truth.assert_matches(order)

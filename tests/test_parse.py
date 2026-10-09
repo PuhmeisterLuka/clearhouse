@@ -1,4 +1,3 @@
-from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -145,12 +144,9 @@ def test_ingest_issues_carry_over_to_the_parsed_order():
 
 # Against the generated data and its ground truth
 
-ERRORS = {"bad_date": {"placed_at.invalid", "placed_at.missing"}, "missing_sku": {"sku.missing"},
-          "missing_qty": {"qty.missing"}}
-REPAIRS = {"sku_variant": "sku.repaired", "email_noise": "customer_email.repaired",
-           "mojibake": "customer_name.repaired", "qty_text": "qty.repaired",
-           "buyer_code_noise": "customer_code.repaired"}
-RECOVERABLE = set(REPAIRS) | {"euro_price_variant"}  # parsing alone must recover the true values
+QUARANTINES = {"bad_date", "missing_sku", "missing_qty"}
+REPAIRS = {"sku_variant", "email_noise", "mojibake", "qty_text", "buyer_code_noise"}
+RECOVERABLE = REPAIRS | {"euro_price_variant"}  # parsing alone must recover the true values
 
 
 @pytest.fixture(scope="module")
@@ -159,23 +155,15 @@ def parsed(truth):
 
 
 def test_every_parse_level_defect_is_reported_with_the_right_code(truth, parsed):
-    codes = defaultdict(set)
-    for o in parsed:
-        codes[o.order_ref] |= {i.code for i in o.issues}
-    for key, kinds in truth.kinds.items():
-        for kind in kinds & set(ERRORS):
-            assert codes[key] & ERRORS[kind], (key, kind)
-        for kind in kinds & set(REPAIRS):
-            assert REPAIRS[kind] in codes[key], (key, kind)
+    truth.assert_detected(parsed, QUARANTINES | REPAIRS)
 
 
 def test_no_order_is_rejected_without_a_reason(truth, parsed):
     for o in parsed:
         if o.has_errors:
-            assert truth.kinds[o.order_ref] & set(ERRORS), o.order_ref
+            assert truth.kinds[o.order_ref] & QUARANTINES, o.order_ref
 
 
 def test_parsed_values_equal_the_truth(truth, parsed):
-    comparable = truth.comparable(parsed, RECOVERABLE)
-    for order in comparable:
+    for order in truth.comparable(parsed, RECOVERABLE):
         truth.assert_matches(order)

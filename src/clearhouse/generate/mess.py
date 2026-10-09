@@ -27,7 +27,7 @@ from ..files import write_csv, write_jsonl
 from ..text import ascii_fold
 from .truth import LOCAL_TZ, YEAR, Order, World
 
-DEFECT_RATE = 0.2
+DEFAULT_DEFECT_RATE = 0.2  # share of orders that get a defect
 PICKUP_REF_RATE = 0.7  # how often till staff type the web order number into Ref
 
 POS_DEFECTS = {"bad_date": 2, "negative_qty": 2, "sku_variant": 4, "unknown_sku": 2, "duplicate_row": 3,
@@ -251,13 +251,20 @@ INJECTORS: dict[str, Callable[[Draft, random.Random], dict | None]] = {
 }
 
 
-def maybe_inject(d: Draft, rng: random.Random, weights: dict[str, int], ledger: Ledger) -> None:
-    if rng.random() > DEFECT_RATE:
-        return
-    kind = rng.choices(list(weights), list(weights.values()))[0]
-    detail = INJECTORS[kind](d, rng)
-    if detail is not None:
-        ledger.add(kind, d.order, d.source, **detail)
+@dataclass
+class Mess:
+    """What every writer needs to dirty its export: randomness, how often to strike, and the ledger to record in."""
+    rng: random.Random
+    rate: float
+    ledger: Ledger = field(default_factory=Ledger)
+
+    def maybe_inject(self, d: Draft, weights: dict[str, int]) -> None:
+        if self.rng.random() > self.rate:
+            return
+        kind = self.rng.choices(list(weights), list(weights.values()))[0]
+        detail = INJECTORS[kind](d, self.rng)
+        if detail is not None:
+            self.ledger.add(kind, d.order, d.source, **detail)
 
 
 # Till CSV
@@ -275,13 +282,13 @@ def eu_number(d: Decimal) -> str:
     return f"{'-' if d < 0 else ''}{'.'.join(groups)},{frac}"
 
 
-def pickup_draft(order: Order, rng: random.Random, ledger: Ledger) -> Draft:
+def pickup_draft(order: Order, mess: Mess) -> Draft:
     """The till's copy of a click-and-collect web order, rung up when the customer collects it."""
     d = Draft.of(order, "pos")
     d.native_id, d.placed_at = order.pos_receipt, order.pickup_at
-    has_ref = rng.random() < PICKUP_REF_RATE
+    has_ref = mess.rng.random() < PICKUP_REF_RATE
     d.ref = order.native_id if has_ref else ""
-    ledger.add("cross_channel_duplicate", order, "pos", copy_id=d.native_id, ref_present=has_ref)
+    mess.ledger.add("cross_channel_duplicate", order, "pos", copy_id=d.native_id, ref_present=has_ref)
     return d
 
 
@@ -292,15 +299,15 @@ def pos_rows(d: Draft) -> list[list[str]]:
     return rows * d.copies
 
 
-def write_pos(world: World, rng: random.Random, ledger: Ledger, path: Path) -> None:
+def write_pos(world: World, mess: Mess, path: Path) -> None:
     drafts = []
     for order in world.orders:
         if order.channel == "pos":
             d = Draft.of(order, "pos")
-            maybe_inject(d, rng, POS_DEFECTS, ledger)
+            mess.maybe_inject(d, POS_DEFECTS)
             drafts.append(d)
         elif order.collect_in_store:
-            drafts.append(pickup_draft(order, rng, ledger))
+            drafts.append(pickup_draft(order, mess))
     rows = [row for d in sorted(drafts, key=lambda d: d.placed_at) for row in pos_rows(d)]
 
     buf = io.StringIO()
@@ -349,22 +356,22 @@ def swap_neighbours(items: list, rng: random.Random, p: float) -> None:
             items[i], items[i + 1] = items[i + 1], items[i]
 
 
-def write_web(world: World, rng: random.Random, ledger: Ledger, path: Path) -> None:
+def write_web(world: World, mess: Mess, path: Path) -> None:
     records: list[dict] = []
     retries: list[tuple[int, dict]] = []
     for order in (o for o in world.orders if o.channel == "web"):
         d = Draft.of(order, "web")
         # Pickups stay clean here so their till copy is the only thing to reconcile.
         if not order.collect_in_store:
-            maybe_inject(d, rng, WEB_DEFECTS, ledger)
-        records.append(web_record(d, rng))
+            mess.maybe_inject(d, WEB_DEFECTS)
+        records.append(web_record(d, mess.rng))
         for _ in range(d.copies - 1):
             # A webhook retry re-sends the same order a bit later in the stream.
-            retries.append((len(records) + rng.randint(1, 30), records[-1]))
+            retries.append((len(records) + mess.rng.randint(1, 30), records[-1]))
 
     for position, record in sorted(retries, key=lambda r: r[0], reverse=True):
         records.insert(min(position, len(records)), record)
-    swap_neighbours(records, rng, 0.3)  # the API pages by update time, not creation time
+    swap_neighbours(records, mess.rng, 0.3)  # the API pages by update time, not creation time
 
     payload = {"export": {"source": "webshop", "generated_at": f"{YEAR + 1}-01-02T03:00:00Z", "count": len(records)},
                "orders": records}
@@ -397,11 +404,11 @@ def wholesale_element(d: Draft) -> ET.Element:
     return el
 
 
-def write_wholesale(world: World, rng: random.Random, ledger: Ledger, path: Path) -> None:
+def write_wholesale(world: World, mess: Mess, path: Path) -> None:
     root = ET.Element("WholesaleExport", supplier="VELO SUPPLY d.o.o.", generated=f"{YEAR + 1}-01-03")
     for order in (o for o in world.orders if o.channel == "wholesale"):
         d = Draft.of(order, "wholesale")
-        maybe_inject(d, rng, WHOLESALE_DEFECTS, ledger)
+        mess.maybe_inject(d, WHOLESALE_DEFECTS)
         root.extend(wholesale_element(d) for _ in range(d.copies))
     ET.indent(root)
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
@@ -419,30 +426,35 @@ def write_reference(world: World, ref_dir: Path) -> None:
               ((f"{YEAR}-{month:02d}", currency, rate) for (month, currency), rate in sorted(world.fx.items())))
 
 
+TRUTH_ORDER_COLUMNS = ["order_key", "channel", "native_id", "customer_id", "placed_at_utc", "placed_date", "currency",
+                       "total", "total_eur", "pos_receipt", "expected"]
+
+
+def truth_order_row(world: World, order: Order, quarantined: set[str]) -> list[Any]:
+    return [order.key, order.channel, order.native_id, order.customer.customer_id if order.customer else "",
+            order.placed_at.strftime("%Y-%m-%dT%H:%M:%SZ"), order.placed_at.astimezone(LOCAL_TZ).date(),
+            order.currency, order.total, world.total_eur(order), order.pos_receipt or "",
+            "quarantine" if order.key in quarantined else "clean"]
+
+
 def write_truth(world: World, ledger: Ledger, truth_dir: Path) -> None:
     quarantined = ledger.quarantined_keys()
-    write_csv(truth_dir / "orders.csv",
-              ["order_key", "channel", "native_id", "customer_id", "placed_at_utc", "currency", "total", "total_eur",
-               "pos_receipt", "expected"],
-              ((o.key, o.channel, o.native_id, o.customer.customer_id if o.customer else "",
-                o.placed_at.strftime("%Y-%m-%dT%H:%M:%SZ"), o.currency, o.total, world.total_eur(o),
-                o.pos_receipt or "", "quarantine" if o.key in quarantined else "clean")
-               for o in world.orders))
+    write_csv(truth_dir / "orders.csv", TRUTH_ORDER_COLUMNS,
+              (truth_order_row(world, o, quarantined) for o in world.orders))
     write_csv(truth_dir / "lines.csv", ["order_key", "sku", "qty", "unit_price"],
               ((o.key, ln.sku, ln.qty, ln.unit_price) for o in world.orders for ln in o.lines))
     write_jsonl(truth_dir / "defects.jsonl", ledger.rows)
 
 
-def generate(out_dir: Path, world: World, seed: int = 7) -> Ledger:
-    rng = random.Random(seed + 1)
+def generate(out_dir: Path, world: World, seed: int = 7, defect_rate: float = DEFAULT_DEFECT_RATE) -> Ledger:
     raw, reference, truth = (out_dir / name for name in ("raw", "reference", "truth"))
     for directory in (raw, reference, truth):
         directory.mkdir(parents=True, exist_ok=True)
 
-    ledger = Ledger()
-    write_pos(world, rng, ledger, raw / f"pos_ljubljana_{YEAR}.csv")
-    write_web(world, rng, ledger, raw / f"webshop_orders_{YEAR}.json")
-    write_wholesale(world, rng, ledger, raw / f"wholesale_{YEAR}.xml")
+    mess = Mess(random.Random(seed + 1), defect_rate)
+    write_pos(world, mess, raw / f"pos_ljubljana_{YEAR}.csv")
+    write_web(world, mess, raw / f"webshop_orders_{YEAR}.json")
+    write_wholesale(world, mess, raw / f"wholesale_{YEAR}.xml")
     write_reference(world, reference)
-    write_truth(world, ledger, truth)
-    return ledger
+    write_truth(world, mess.ledger, truth)
+    return mess.ledger

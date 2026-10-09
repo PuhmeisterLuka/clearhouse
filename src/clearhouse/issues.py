@@ -19,3 +19,6 @@ class Issue:
     locator: str = ""
     order_ref: str | None = None
     value: str | None = None
+
+    def describe(self) -> str:
+        return f"{self.code}: {self.message}" + (f" ({self.value})" if self.value else "")
