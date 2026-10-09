@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from .model import Line, Order
 from .money import money
-from .parse.records import ParsedLine, ParsedOrder
 from .reference import Reference
 
 STAGE = "check"
@@ -36,10 +36,10 @@ class CheckContext:
     as_of: date  # nothing can have been ordered after this
 
 
-Rule = Callable[[ParsedOrder, CheckContext], None]
+Rule = Callable[[Order, CheckContext], None]
 
 
-def lines_total(lines: Iterable[ParsedLine]) -> Decimal | None:
+def lines_total(lines: Iterable[Line]) -> Decimal | None:
     totals = [line.total for line in lines]
     return None if None in totals else sum(totals, Decimal("0.00"))
 
@@ -50,13 +50,13 @@ def currency_for_country(country: str | None) -> str | None:
     return WEB_CURRENCY.get(country)
 
 
-def check_not_future(order: ParsedOrder, ctx: CheckContext) -> None:
+def check_not_future(order: Order, ctx: CheckContext) -> None:
     if order.placed_date is not None and order.placed_date > ctx.as_of:
         order.log(STAGE, "error", "placed_at.future", f"dated {order.placed_date}, after {ctx.as_of}",
                   value=order.placed_date)
 
 
-def resolve_currency(order: ParsedOrder, ctx: CheckContext) -> None:
+def resolve_currency(order: Order, ctx: CheckContext) -> None:
     if order.currency is None:
         inferred = currency_for_country(order.customer_country)
         if inferred is None:
@@ -71,19 +71,19 @@ def resolve_currency(order: ParsedOrder, ctx: CheckContext) -> None:
                   value=order.currency)
 
 
-def check_known_skus(order: ParsedOrder, ctx: CheckContext) -> None:
+def check_known_skus(order: Order, ctx: CheckContext) -> None:
     for line in order.lines:
         if line.sku is not None and ctx.reference.list_price(line.sku) is None:
             order.log(STAGE, "error", "sku.unknown", "not in the product catalog", line.locator, line.sku)
 
 
-def check_quantities(order: ParsedOrder, ctx: CheckContext) -> None:
+def check_quantities(order: Order, ctx: CheckContext) -> None:
     for line in order.lines:
         if line.qty is not None and line.qty <= 0:
             order.log(STAGE, "error", "qty.not_positive", "quantity must be at least 1", line.locator, line.qty)
 
 
-def check_prices(order: ParsedOrder, ctx: CheckContext) -> None:
+def check_prices(order: Order, ctx: CheckContext) -> None:
     """Compare each price, in euros, with the list price. A ~100x price was written in cents."""
     rate = ctx.reference.rate(order.currency, order.placed_date)
     for line in order.lines:
@@ -101,14 +101,14 @@ def check_prices(order: ParsedOrder, ctx: CheckContext) -> None:
                       line.unit_price)
 
 
-def drop_duplicate_lines(order: ParsedOrder, ctx: CheckContext) -> None:
+def drop_duplicate_lines(order: Order, ctx: CheckContext) -> None:
     """Identical lines are dropped only when the order's own total says they shouldn't be there.
 
     A customer can legitimately buy the same thing twice on separate lines, so a repeat alone
     proves nothing. A repeat that is also the exact difference between the lines and the total does.
     """
-    unique: list[ParsedLine] = []
-    repeats: list[ParsedLine] = []
+    unique: list[Line] = []
+    repeats: list[Line] = []
     seen: set[tuple] = set()
     for line in order.lines:
         key = (line.sku, line.qty, line.unit_price)
@@ -122,7 +122,7 @@ def drop_duplicate_lines(order: ParsedOrder, ctx: CheckContext) -> None:
     order.lines = unique
 
 
-def reconcile_total(order: ParsedOrder, ctx: CheckContext) -> None:
+def reconcile_total(order: Order, ctx: CheckContext) -> None:
     """Lines are the more detailed record, so when the header total disagrees the lines win."""
     computed = lines_total(order.lines)
     if computed is None or computed == order.total:
@@ -139,7 +139,7 @@ VALIDATIONS: list[Rule] = [check_not_future, check_known_skus, check_quantities]
 REPAIRS: list[Rule] = [resolve_currency, check_prices, drop_duplicate_lines, reconcile_total]
 
 
-def check_orders(orders: list[ParsedOrder], ctx: CheckContext) -> None:
+def check_orders(orders: list[Order], ctx: CheckContext) -> None:
     """Validates every order, then repairs the ones still sound. Works in place."""
     for order in orders:
         for rule in VALIDATIONS:

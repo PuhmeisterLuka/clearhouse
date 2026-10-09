@@ -95,13 +95,22 @@ class Draft:
 
 # Defect injectors. Each edits a draft and returns ledger details, or None when it doesn't apply.
 
+def pick_variant(rng: random.Random, original: str, variants: list[str]) -> str | None:
+    """A variant that really differs, so the ledger never records a defect that changed nothing."""
+    different = [v for v in variants if v != original]
+    return rng.choice(different) if different else None
+
+
 def inject_sku_variant(d: Draft, rng: random.Random) -> dict | None:
     line = rng.choice(d.lines)
     true_sku = line["sku"]
     prefix, num = true_sku.split("-")
-    line["sku"] = rng.choice([true_sku.lower(), f"{prefix}{num}", f"{prefix}-{int(num)}", f"  {true_sku} ",
-                              f"{prefix.lower()}_{num}"])
-    return {"true_sku": true_sku, "value": line["sku"]}
+    variant = pick_variant(rng, true_sku, [true_sku.lower(), f"{prefix}{num}", f"{prefix}-{int(num)}",
+                                           f"  {true_sku} ", f"{prefix.lower()}_{num}"])
+    if variant is None:
+        return None
+    line["sku"] = variant
+    return {"true_sku": true_sku, "value": variant}
 
 
 def inject_unknown_sku(d: Draft, rng: random.Random) -> dict | None:
@@ -182,16 +191,22 @@ def inject_missing_currency(d: Draft, rng: random.Random) -> dict | None:
 def inject_email_noise(d: Draft, rng: random.Random) -> dict | None:
     if not d.email:
         return None
-    d.email = rng.choice([d.email.upper(), f" {d.email}", f"{d.email}  ", d.email.title()])
-    return {"value": d.email}
+    variant = pick_variant(rng, d.email, [d.email.upper(), f" {d.email}", f"{d.email}  ", d.email.title()])
+    if variant is None:
+        return None
+    d.email = variant
+    return {"value": variant}
 
 
 def inject_name_variant(d: Draft, rng: random.Random) -> dict | None:
     if not d.name:
         return None
     first, last = d.name.split(" ", 1)
-    d.name = rng.choice([ascii_fold(d.name), f"{last} {first}", d.name.upper()])
-    return {"value": d.name}
+    variant = pick_variant(rng, d.name, [ascii_fold(d.name), f"{last} {first}", d.name.upper()])
+    if variant is None:
+        return None
+    d.name = variant
+    return {"value": variant}
 
 
 def inject_mojibake(d: Draft, rng: random.Random) -> dict | None:
@@ -207,8 +222,11 @@ def inject_mojibake(d: Draft, rng: random.Random) -> dict | None:
 
 
 def inject_buyer_code_noise(d: Draft, rng: random.Random) -> dict | None:
-    d.code = rng.choice([d.code.lower(), f" {d.code} ", d.code.replace("B", "B-")])
-    return {"value": d.code}
+    variant = pick_variant(rng, d.code, [d.code.lower(), f" {d.code} ", d.code.replace("B", "B-")])
+    if variant is None:
+        return None
+    d.code = variant
+    return {"value": variant}
 
 
 INJECTORS: dict[str, Callable[[Draft, random.Random], dict | None]] = {

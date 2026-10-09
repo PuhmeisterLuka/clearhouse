@@ -2,26 +2,17 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from builders import make_line, make_order
 
 from clearhouse.check import CheckContext, check_orders
-from clearhouse.parse.records import ParsedLine, ParsedOrder
 from clearhouse.reference import Reference, load_reference
 
 REFERENCE = Reference(
     list_prices={"BRK-0001": Decimal("10.00"), "CHN-0002": Decimal("4.00")},
     fx={("2025-03", "USD"): Decimal("1.10")},
+    customers={},
 )
 CTX = CheckContext(REFERENCE, as_of=date(2025, 12, 31))
-
-
-def make_line(sku="BRK-0001", qty=1, price="10.00", n=0):
-    return ParsedLine(sku, qty, Decimal(price), f"line {n}")
-
-
-def make_order(lines, total=None, currency="EUR", country="SI", placed=date(2025, 3, 14)):
-    total = sum((ln.total for ln in lines), Decimal("0.00")) if total is None else Decimal(total)
-    return ParsedOrder("web", "f.json", "orders[0]", "1", None, placed, currency, total,
-                       None, None, None, country, None, None, lines=lines)
 
 
 def checked(o):
@@ -33,8 +24,8 @@ def checked(o):
 
 
 def test_future_dates_are_rejected():
-    assert checked(make_order([make_line()], placed=date(2031, 3, 14)))["placed_at.future"].severity == "error"
-    assert not checked(make_order([make_line()], placed=CTX.as_of))
+    assert checked(make_order([make_line()], placed_date=date(2031, 3, 14)))["placed_at.future"].severity == "error"
+    assert not checked(make_order([make_line()], placed_date=CTX.as_of))
 
 
 def test_unknown_skus_and_non_positive_quantities_are_rejected():
@@ -47,18 +38,19 @@ def test_unknown_skus_and_non_positive_quantities_are_rejected():
 
 
 def test_missing_currency_is_inferred_from_the_customer_country():
-    o = make_order([make_line(price="11.00")], currency=None, country="US")
+    o = make_order([make_line(price="11.00")], currency=None, customer_country="US")
     assert checked(o)["currency.inferred"].severity == "warning"
     assert o.currency == "USD"
 
 
 @pytest.mark.parametrize("country", [None, "CH"])
 def test_currency_that_cant_be_inferred_is_an_error(country):
-    assert checked(make_order([make_line()], currency=None, country=country))["currency.unknown"].severity == "error"
+    codes = checked(make_order([make_line()], currency=None, customer_country=country))
+    assert codes["currency.unknown"].severity == "error"
 
 
 def test_currency_without_a_rate_for_the_month_is_an_error():
-    assert "currency.no_rate" in checked(make_order([make_line()], currency="USD", placed=date(2025, 7, 1)))
+    assert "currency.no_rate" in checked(make_order([make_line()], currency="USD", placed_date=date(2025, 7, 1)))
 
 
 def test_price_written_in_cents_is_scaled_back():

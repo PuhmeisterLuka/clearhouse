@@ -27,7 +27,7 @@ Each stage looks at a wider scope than the one before: one value, then one order
 1. **Ingest.** One adapter per format, each producing the same raw record shape with lineage (file, row or element, raw value). Encoding detection, preamble skipping, nested-JSON flattening.
 2. **Parse.** Validate and clean every value in one pass. Each field goes through a reusable parser that either returns a typed value, logging any repair (SKU formats, emails, mojibake, text quantities, buyer codes), or rejects it. Number formats, time zones and cents are read according to each source's format.
 3. **Check.** Rules that need the whole order or the reference data: known SKUs, positive quantities, no dates in the future, a currency inferred from the customer's country when it's missing, 100x price slips against the catalog, repeated rows, and header totals against line sums.
-4. **Reconcile.** Dedupe exact repeats and webhook retries, match till pickups to web orders (by reference, then fuzzily by customer, items and timing), resolve customers against the CRM, convert to EUR.
+4. **Reconcile.** Resolve every customer against the CRM, drop repeated records such as webhook retries, match till pickups to their web orders (by reference, then by customer, items and timing), and convert every total to EUR. Each record ends up with one status: clean, quarantined, or a duplicate copy of another record.
 5. **Report.** Clean tables (orders, lines, customers), a quarantine file with reasons, an issue log, and an HTML data-quality report.
 6. **Score.** Compare the pipeline's output with the ground truth and ledger: defect detection rates per kind, false quarantines, and value accuracy.
 
@@ -45,7 +45,7 @@ This writes `data/raw`, `data/reference` and `data/truth`. The pipeline must nev
 uv run clearhouse run
 ```
 
-Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/orders.jsonl` and `out/issues.csv`. Orders dated after `--as-of` (default: today) are rejected as impossible.
+Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/orders.jsonl` (every record with its final status) and `out/issues.csv`. Orders dated after `--as-of` (default: today) are rejected as impossible.
 
 ## Development
 
@@ -81,12 +81,24 @@ Repairs run in a fixed order because each one makes the next more reliable. Pric
 
 The tests check that the orders rejected after this stage are exactly the ones the ledger says should be quarantined, with no misses and no false alarms, and that every recoverable order matches the ground truth field for field.
 
+## How reconciliation works
+
+[`reconcile.py`](src/clearhouse/reconcile.py) makes the decisions that need more than one record at a time.
+
+Customers are identified by buyer code or email, never by name, because names are typed by hand. Once a customer is found in the CRM, the order takes the CRM's spelling, which is how `NOVAK ŽIGA` and `Tomaz Krajnc` become `Žiga Novak` and `Tomaž Krajnc`.
+
+When a source sends the same order id twice, the first record wins and an identical later one is marked as its copy. If the two records differ, nobody can say which is right, so the order goes to quarantine.
+
+Click-and-collect orders are recorded twice: once by the webshop when they're placed, and again by the till when the customer picks them up. The till receipt is treated as the copy, because the sale happened online and counting both would double the revenue. Receipts carrying the web order number in `Ref` are matched first. The rest are matched on the same customer, items and total within a seven-day pickup window, but only when exactly one web order fits. Two equally good candidates mean the receipt is kept as its own sale and flagged, rather than guessed at.
+
+The tests check the whole pipeline end to end: the copies it drops are exactly the ledger's duplicates, paired with the right originals, and every true order survives exactly once with the outcome the ledger expects. Every clean order matches the ground truth down to its CRM customer and its euro total. Breaking the matcher on purpose (skipping the no-`Ref` pass, shrinking the pickup window, keeping typed names) makes those tests fail.
+
 ## Build log
 
 - [x] Step 1: ground-truth world and messy data generator with defect ledger
 - [x] Step 2: ingestion adapters
 - [x] Step 3: field parsing (validate and clean each value)
 - [x] Step 4: order checks against reference data
-- [ ] Step 5: reconciliation
+- [x] Step 5: reconciliation
 - [ ] Step 6: report and scoring
 - [ ] Step 7: CI and polish

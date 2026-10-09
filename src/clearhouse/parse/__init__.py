@@ -12,8 +12,8 @@ from zoneinfo import ZoneInfo
 
 from ..ingest.records import RawLine, RawOrder
 from ..issues import Issue, Severity
+from ..model import Line, Order
 from . import fields
-from .records import ParsedLine, ParsedOrder
 
 type Parser[T] = Callable[[str], fields.Parsed[T]]
 
@@ -78,9 +78,9 @@ def business_date(placed: datetime | date | None) -> date | None:
     return placed
 
 
-def parse_line(reader: FieldReader, line: RawLine, fmt: SourceFormat) -> ParsedLine:
+def parse_line(reader: FieldReader, line: RawLine, fmt: SourceFormat) -> Line:
     loc = line.locator
-    return ParsedLine(
+    return Line(
         sku=reader.read("sku", line.sku, fields.parse_sku, required=True, locator=loc),
         qty=reader.read("qty", line.qty, fields.parse_quantity, required=True, locator=loc),
         unit_price=reader.read("unit_price", line.unit_price, fmt.amount(line.price_scale), required=True, locator=loc),
@@ -88,13 +88,13 @@ def parse_line(reader: FieldReader, line: RawLine, fmt: SourceFormat) -> ParsedL
     )
 
 
-def parse_order(raw: RawOrder) -> ParsedOrder:
+def parse_order(raw: RawOrder) -> Order:
     fmt = FORMATS[raw.source]
     reader = FieldReader(raw, list(raw.issues))  # ingest issues stay with the order
     if not raw.lines:
         reader.log("error", "lines.missing", "order has no lines", raw.locator)
     placed = reader.read("placed_at", raw.placed_at, fmt.timestamp, required=True)
-    return ParsedOrder(
+    return Order(
         source=raw.source,
         file=raw.file,
         locator=raw.locator,
@@ -114,5 +114,5 @@ def parse_order(raw: RawOrder) -> ParsedOrder:
     )
 
 
-def parse_orders(raw_orders: Iterable[RawOrder]) -> list[ParsedOrder]:
+def parse_orders(raw_orders: Iterable[RawOrder]) -> list[Order]:
     return [parse_order(raw) for raw in raw_orders]

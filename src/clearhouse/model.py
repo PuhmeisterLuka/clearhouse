@@ -1,4 +1,7 @@
-"""Typed orders: every field is either a valid value or None, and every repair or failure is in `issues`."""
+"""The pipeline's order record. Parsing creates it; checks and reconciliation repair and annotate it in place.
+
+Every field is either a valid value or None, and every repair or failure is in `issues`.
+"""
 
 from __future__ import annotations
 
@@ -7,12 +10,12 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from ..issues import Issue, Severity
-from ..money import money
+from .issues import Issue, Severity
+from .money import money
 
 
 @dataclass
-class ParsedLine:
+class Line:
     sku: str | None
     qty: int | None
     unit_price: Decimal | None
@@ -26,7 +29,7 @@ class ParsedLine:
 
 
 @dataclass
-class ParsedOrder:
+class Order:
     source: str
     file: str
     locator: str
@@ -41,8 +44,11 @@ class ParsedOrder:
     customer_country: str | None
     ref: str | None
     fulfillment: str | None
-    lines: list[ParsedLine] = field(default_factory=list)
+    lines: list[Line] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
+    customer_id: str | None = None  # set when the customer is found in the CRM
+    total_eur: Decimal | None = None
+    duplicate_of: str | None = None  # order_ref of the record this one copies
 
     @property
     def order_ref(self) -> str:
@@ -51,6 +57,13 @@ class ParsedOrder:
     @property
     def has_errors(self) -> bool:
         return any(i.severity == "error" for i in self.issues)
+
+    @property
+    def status(self) -> str:
+        """Where the record ends up: a copy to drop, an order to quarantine, or a clean order."""
+        if self.duplicate_of is not None:
+            return "duplicate"
+        return "quarantined" if self.has_errors else "clean"
 
     def log(self, stage: str, severity: Severity, code: str, message: str,
             locator: str | None = None, value: Any = None) -> None:

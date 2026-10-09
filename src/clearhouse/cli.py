@@ -11,8 +11,9 @@ from .generate.truth import build_world
 from .ingest import ingest_dir
 from .ingest.records import SourceResult
 from .issues import Issue
+from .model import Order
 from .parse import parse_orders
-from .parse.records import ParsedOrder
+from .reconcile import reconcile
 from .reference import load_reference
 
 ISSUE_COLUMNS = ["stage", "severity", "code", "source", "order_ref", "locator", "value", "message"]
@@ -25,10 +26,11 @@ def print_sources(results: list[SourceResult]) -> None:
         print(f"{s.source:<10} {s.file:<28} {s.encoding:<9} {s.orders:>6} {s.lines:>6}")
 
 
-def print_order_summary(orders: list[ParsedOrder]) -> None:
-    rejected = sum(o.has_errors for o in orders)
+def print_order_summary(orders: list[Order]) -> None:
+    status = Counter(o.status for o in orders)
     repairs = sum(i.severity == "warning" for o in orders for i in o.issues)
-    print(f"\n{len(orders)} orders: {len(orders) - rejected} usable, {rejected} with errors, {repairs} repairs")
+    print(f"\n{len(orders)} records: {status['clean']} clean orders, {status['quarantined']} quarantined, "
+          f"{status['duplicate']} duplicate copies; {repairs} repairs")
 
 
 def print_issue_counts(issues: list[Issue]) -> None:
@@ -50,12 +52,14 @@ def cmd_run(args: argparse.Namespace) -> None:
     data = Path(args.data)
     results, unclaimed = ingest_dir(data / "raw")
     orders = parse_orders(order for r in results for order in r.orders)
-    check_orders(orders, CheckContext(load_reference(data / "reference"), args.as_of))
+    reference = load_reference(data / "reference")
+    check_orders(orders, CheckContext(reference, args.as_of))
+    reconcile(orders, reference)
 
     file_issues = unclaimed + [i for r in results for i in r.issues]
     issues = file_issues + [i for o in orders for i in o.issues]
     out = Path(args.out)
-    write_jsonl(out / "orders.jsonl", (asdict(o) for o in orders))
+    write_jsonl(out / "orders.jsonl", ({**asdict(o), "status": o.status} for o in orders))
     write_csv(out / "issues.csv", ISSUE_COLUMNS, ([getattr(i, c) for c in ISSUE_COLUMNS] for i in issues))
 
     print_sources(results)

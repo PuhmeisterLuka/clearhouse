@@ -13,8 +13,8 @@ import pytest
 from clearhouse.generate.mess import generate
 from clearhouse.generate.truth import build_world
 from clearhouse.ingest import ingest_dir
+from clearhouse.model import Order
 from clearhouse.parse import BUSINESS_TZ, parse_orders
-from clearhouse.parse.records import ParsedOrder
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -25,6 +25,7 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 @dataclass
 class Truth:
     data: Path
+    ledger: list[dict]  # every injected defect
     kinds: dict[str, set[str]]  # order key -> defect kinds injected into it
     orders: dict[str, dict[str, str]]
     lines: dict[str, list[tuple[str, int, Decimal]]]
@@ -33,29 +34,30 @@ class Truth:
 
     @classmethod
     def load(cls, data: Path) -> "Truth":
+        ledger = [json.loads(line) for line in (data / "truth/defects.jsonl").open()]
         kinds = defaultdict(set)
-        for row in map(json.loads, (data / "truth/defects.jsonl").open()):
+        for row in ledger:
             kinds[row["order_key"]].add(row["kind"])
         lines = defaultdict(list)
         for row in read_csv(data / "truth/lines.csv"):
             lines[row["order_key"]].append((row["sku"], int(row["qty"]), Decimal(row["unit_price"])))
-        return cls(data, kinds,
+        return cls(data, ledger, kinds,
                    {row["order_key"]: row for row in read_csv(data / "truth/orders.csv")},
                    lines,
                    {row["customer_id"]: row for row in read_csv(data / "reference/crm_customers.csv")})
 
-    def parse(self) -> list[ParsedOrder]:
+    def parse(self) -> list[Order]:
         results, _ = ingest_dir(self.data / "raw")
         return parse_orders(order for r in results for order in r.orders)
 
-    def comparable(self, orders: list[ParsedOrder], recoverable: set[str]) -> list[ParsedOrder]:
+    def comparable(self, orders: list[Order], recoverable: set[str]) -> list[Order]:
         """Orders whose defects are all ones the stage should have undone. Fails if any such order is missing."""
         expected = {key for key in self.orders if self.kinds[key] <= recoverable}
         found = [o for o in orders if o.order_ref in expected]
         assert {o.order_ref for o in found} == expected
         return found
 
-    def assert_matches(self, order: ParsedOrder) -> None:
+    def assert_matches(self, order: Order) -> None:
         t = self.orders[order.order_ref]
         moment = datetime.fromisoformat(t["placed_at_utc"])
         assert [(ln.sku, ln.qty, ln.unit_price) for ln in order.lines] == self.lines[order.order_ref]
