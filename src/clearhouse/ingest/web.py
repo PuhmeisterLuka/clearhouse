@@ -44,25 +44,25 @@ def load_records(raw: str, result: SourceResult) -> list[Any]:
     return records
 
 
-def parse_customer(value: Any, loc: str, result: SourceResult) -> dict[str, Any]:
+def parse_customer(value: Any, result: SourceResult) -> tuple[dict[str, Any], bool]:
+    """The customer object, and whether it was unusable."""
     if value is None:
-        return {}
+        return {}, False
     if not isinstance(value, dict):
-        result.issue("warning", "web.bad_customer", "customer is not an object", loc, value=text(value))
-        return {}
+        return {}, True
     result.flag_unknown("customer", value.keys() - CUSTOMER_KEYS)
-    return value
+    return value, False
 
 
-def parse_items(items: Any, loc: str, order_ref: str, result: SourceResult) -> list[RawLine]:
+def parse_items(items: Any, loc: str, order: RawOrder, result: SourceResult) -> list[RawLine]:
     if not isinstance(items, list):
-        result.issue("error", "web.no_items", "order has no items list", loc, order_ref, text(items))
+        result.issue("error", "web.no_items", "order has no items list", loc, text(items), order)
         return []
     lines = []
     for j, item in enumerate(items):
         item_loc = f"{loc}.items[{j}]"
         if not isinstance(item, dict):
-            result.issue("error", "web.bad_item", "item is not an object", item_loc, order_ref, text(item))
+            result.issue("error", "web.bad_item", "item is not an object", item_loc, text(item), order)
             continue
         result.flag_unknown("item", item.keys() - ITEM_KEYS)
         lines.append(RawLine(text(item.get("sku")), text(item.get("quantity")), text(item.get("price")), 1, item_loc))
@@ -74,13 +74,15 @@ def parse_order(rec: Any, loc: str, file: str, result: SourceResult) -> RawOrder
         result.issue("error", "web.not_an_object", "order entry is not an object", loc, value=text(rec))
         return None
     result.flag_unknown("order", rec.keys() - ORDER_KEYS)
-    customer = parse_customer(rec.get("customer"), loc, result)
+    customer, unusable = parse_customer(rec.get("customer"), result)
     order = RawOrder("web", file, loc, text(rec.get("id")),
                      placed_at=text(rec.get("created_at")), currency=text(rec.get("currency")),
                      total=text(rec.get("total")), customer_name=text(customer.get("name")),
                      customer_email=text(customer.get("email")), customer_country=text(customer.get("country")),
                      fulfillment=text(rec.get("fulfillment")))
-    order.lines = parse_items(rec.get("items"), loc, order.order_ref, result)
+    if unusable:
+        result.issue("warning", "web.bad_customer", "customer is not an object", loc, text(rec["customer"]), order)
+    order.lines = parse_items(rec.get("items"), loc, order, result)
     return order
 
 

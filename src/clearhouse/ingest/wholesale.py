@@ -23,12 +23,12 @@ def parse_total(el: ET.Element) -> tuple[str | None, int]:
     return blank_to_none(el.findtext("Total")), 1
 
 
-def parse_line(line: ET.Element, loc: str, order_ref: str, result: SourceResult) -> RawLine:
+def parse_line(line: ET.Element, loc: str, order: RawOrder, result: SourceResult) -> RawLine:
     result.flag_unknown("Line", line.attrib.keys() - LINE_ATTRS)
     if "unitPriceCents" not in line.attrib and "unitPrice" in line.attrib:
         # Older feed version, still sent by some buyers' integrations.
         result.issue("info", "wholesale.price_in_euros", "line uses unitPrice instead of unitPriceCents",
-                     loc, order_ref, line.get("unitPrice"))
+                     loc, line.get("unitPrice"), order)
         price, scale = line.get("unitPrice"), 1
     else:
         price, scale = line.get("unitPriceCents"), 100
@@ -44,7 +44,7 @@ def parse_order(el: ET.Element, loc: str, file: str, result: SourceResult) -> Ra
                      currency="EUR", customer_code=blank_to_none(buyer.get("code")),
                      customer_name=blank_to_none(buyer.findtext("Company")))
     order.total, order.total_scale = parse_total(el)
-    order.lines = [parse_line(line, f"{loc}/Line[{j}]", order.order_ref, result)
+    order.lines = [parse_line(line, f"{loc}/Line[{j}]", order, result)
                    for j, line in enumerate(el.findall("Lines/Line"))]
     return order
 

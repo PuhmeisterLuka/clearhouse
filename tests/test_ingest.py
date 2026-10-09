@@ -10,8 +10,12 @@ from clearhouse.ingest.web import read_web
 from clearhouse.ingest.wholesale import read_wholesale
 
 
+def issues(result):
+    return result.issues + [i for order in result.orders for i in order.issues]
+
+
 def codes(result):
-    return [i.code for i in result.issues]
+    return [i.code for i in issues(result)]
 
 
 POS_CSV = (
@@ -136,4 +140,4 @@ def test_every_true_order_and_every_extra_copy_is_read(generated):
     assert [i.code for i in stray] == ["ingest.unclaimed_file"]
 
     # The generator never breaks file structure, so nothing at error level should come out of ingestion.
-    assert not [i for r in results for i in r.issues if i.severity == "error"]
+    assert not [i for r in results for i in issues(r) if i.severity == "error"]

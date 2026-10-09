@@ -23,6 +23,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from ..files import write_csv, write_jsonl
 from ..text import ascii_fold
 from .truth import LOCAL_TZ, YEAR, Order, World
 
@@ -390,13 +391,6 @@ def write_wholesale(world: World, rng: random.Random, ledger: Ledger, path: Path
 
 # Reference data and ground truth
 
-def write_csv(path: Path, header: list[str], rows) -> None:
-    with path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows(rows)
-
-
 def write_reference(world: World, ref_dir: Path) -> None:
     write_csv(ref_dir / "products.csv", ["sku", "name", "category", "list_price_eur"],
               ((p.sku, p.name, p.category, p.price_eur) for p in world.products))
@@ -418,9 +412,7 @@ def write_truth(world: World, ledger: Ledger, truth_dir: Path) -> None:
                for o in world.orders))
     write_csv(truth_dir / "lines.csv", ["order_key", "sku", "qty", "unit_price"],
               ((o.key, ln.sku, ln.qty, ln.unit_price) for o in world.orders for ln in o.lines))
-    with (truth_dir / "defects.jsonl").open("w", encoding="utf-8") as f:
-        for row in ledger.rows:
-            f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    write_jsonl(truth_dir / "defects.jsonl", ledger.rows)
 
 
 def generate(out_dir: Path, world: World, seed: int = 7) -> Ledger:

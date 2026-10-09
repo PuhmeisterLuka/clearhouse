@@ -42,6 +42,7 @@ class RawOrder:
     ref: str | None = None
     fulfillment: str | None = None
     lines: list[RawLine] = field(default_factory=list)
+    issues: list[Issue] = field(default_factory=list)
 
     @property
     def order_ref(self) -> str:
@@ -61,13 +62,15 @@ class SourceStats:
 class SourceResult:
     stats: SourceStats
     orders: list[RawOrder] = field(default_factory=list)
-    issues: list[Issue] = field(default_factory=list)
+    issues: list[Issue] = field(default_factory=list)  # about the file, not any one order
     unknown_fields: Counter[str] = field(default_factory=Counter)
 
     def issue(self, severity: Severity, code: str, message: str, locator: str = "",
-              order_ref: str | None = None, value: Any = None) -> None:
-        self.issues.append(Issue("ingest", severity, code, message, self.stats.source, locator, order_ref,
-                                 None if value is None else str(value)))
+              value: Any = None, order: RawOrder | None = None) -> None:
+        """Log against the order when there is one, so later stages know which order it taints."""
+        issue = Issue("ingest", severity, code, message, self.stats.source, locator,
+                      order.order_ref if order else None, None if value is None else str(value))
+        (order.issues if order else self.issues).append(issue)
 
     def flag_unknown(self, where: str, names: Iterable[str]) -> None:
         """Count fields outside the expected schema, usually the first sign an upstream system changed."""

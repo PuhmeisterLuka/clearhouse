@@ -70,7 +70,7 @@ def check_footer(result: SourceResult, row: list[str], data_rows: int, loc: str)
 
 
 def add_line(result: SourceResult, orders: dict[str, RawOrder], cell: dict[str, str | None],
-             file: str, loc: str) -> None:
+             file: str, loc: str) -> RawOrder:
     """Rows sharing a receipt number become one order. Its header fields come from the first row."""
     receipt = cell["native_id"]
     order = orders.get(receipt)
@@ -82,8 +82,9 @@ def add_line(result: SourceResult, orders: dict[str, RawOrder], cell: dict[str, 
         for f in ORDER_FIELDS:
             if cell.get(f) != getattr(order, f):
                 message = f"{f} differs from the receipt's first row, kept the first"
-                result.issue("warning", "pos.header_disagrees", message, loc, order.order_ref, cell.get(f))
+                result.issue("warning", "pos.header_disagrees", message, loc, cell.get(f), order)
     order.lines.append(RawLine(cell["sku"], cell["qty"], cell["unit_price"], 1, loc))
+    return order
 
 
 def read_rows(result: SourceResult, reader: Any, header: list[str], columns: dict[int, str],
@@ -104,10 +105,10 @@ def read_rows(result: SourceResult, reader: Any, header: list[str], columns: dic
         if cell["native_id"] is None:
             result.issue("error", "pos.no_receipt", "row has no receipt number", loc, value=delim.join(row))
             continue
+        order = add_line(result, orders, cell, file, loc)
         if len(row) != len(header):
             result.issue("error", "pos.row_width", f"row has {len(row)} cells, header has {len(header)}", loc,
-                         f"pos:{cell['native_id']}", delim.join(row))
-        add_line(result, orders, cell, file, loc)
+                         delim.join(row), order)
     return list(orders.values())
 
 
