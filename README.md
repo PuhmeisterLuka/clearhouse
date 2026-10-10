@@ -2,13 +2,15 @@
 
 [![CI](https://github.com/PuhmeisterLuka/clearhouse/actions/workflows/ci.yml/badge.svg)](https://github.com/PuhmeisterLuka/clearhouse/actions/workflows/ci.yml)
 
-A data pipeline that takes order exports from three systems with clashing formats, encodings and order ids, reconciles them into one set of clean orders, and grades the result against a known ground truth.
+Three systems export the same company's orders, and no two of them agree on a format. Clearhouse reads all three, fixes what it can fix without guessing, quarantines the rest, and then grades its own result against a known ground truth.
+
+I generate the data myself. The generator builds a clean set of orders first, writes the messy exports from it, and logs every defect it puts in. So I don't have to look at the output and decide it seems clean. I can count what the pipeline got right.
 
 ![The HTML data-quality report the pipeline writes](docs/report.jpg)
 
 ## Results
 
-On the default dataset the pipeline reads 1,283 records from three files. It finishes with 1,143 clean orders, 77 in quarantine and 63 duplicate copies removed, after repairing 127 values. `clearhouse score` then grades that output against the ground truth:
+On the default dataset the pipeline reads 1,283 records from three files. 1,143 come out as clean orders, 77 go to quarantine, and 63 turn out to be copies of other records. It repairs 127 values on the way. `clearhouse score` then compares that output with the truth:
 
 | Check | Result |
 |---|---|
@@ -49,60 +51,108 @@ On the default dataset the pipeline reads 1,283 records from three files. It fin
 
 </details>
 
-A perfect score on data the pipeline was built against proves less than it sounds, so it's backed up three ways. The tests sabotage a correct run's output in seven different ways and check that the scorer names each problem. The score was also perfect on 30 seeds the pipeline was never developed against, and on 15 more with `--defect-rate 0.8`, four times the default density. The test suite reruns one of those dense datasets every time.
+A perfect score needs a caveat. I wrote the generator and the pipeline together, so it only shows that the pipeline handles the defects it was built for. The [limits](#limits) are further down.
 
-## The scenario
+The tests take a correct run's output and break it in seven ways, like losing an order or counting one twice, and the scorer has to name each problem. So a perfect score at least isn't the scorer saying yes to everything. The score also holds on 30 seeds the pipeline wasn't developed against, and on 15 more at four times the defect rate. CI reruns six seed and defect-rate combinations on every push.
 
-Velo Supply is a (fictional) Slovenian bike-parts distributor with three sales channels, each exporting orders its own way:
+## The data
 
-| Source | Format | What's awkward about it |
+Velo Supply is a made-up Slovenian bike-parts distributor with three sales channels. Each one exports orders its own way:
+
+| Source | File | What's awkward about it |
 | --- | --- | --- |
 | Shop till, Ljubljana | `pos_ljubljana_2025.csv` | Windows-1250 encoding, semicolons, Slovenian headers, a junk preamble and footer, decimal commas, local time with DST, one row per line item, anonymous walk-in sales |
 | Webshop API | `webshop_orders_2025.json` | Nested orders, three timestamp styles (UTC, offset, epoch ms), EUR/USD/GBP, prices as strings or numbers, webhook retries, double-encoded names |
-| Wholesale feed | `wholesale_2025.xml` | Prices in cents, dates as `YYYYMMDD`, buyer codes instead of emails, attribute drift between versions |
+| Wholesale feed | `wholesale_2025.xml` | Prices in cents, dates as `YYYYMMDD`, buyer codes instead of emails, attribute names that changed between versions |
 
-Click-and-collect web orders also get rung through the till when the customer picks them up, so they appear twice. Staff usually type the web order number into the till's `Ref` field, but not always.
+Click-and-collect orders show up twice: once in the webshop export, and again in the till's when the customer picks the order up. Staff usually type the web order number into the till's `Ref` field, but about a third of the time they don't.
 
-Alongside the raw files there is reference data: a product catalog, a CRM customer list and monthly FX rates.
+The pipeline also gets a product catalog, a CRM customer list and monthly FX rates, and trusts those as given.
 
-## Why synthetic data
+Every defect the generator injects goes into a ledger, marked with what a correct pipeline should do with it: fix it, quarantine the order, or drop a copy.
 
-The generator builds a clean "true" world first, then writes the messy exports from it and records every defect it injects in a ledger. Each ledger entry says what a correct pipeline should do: **fix** it, **quarantine** the order, or **dedupe** a copy. That makes the pipeline measurable: the scorer counts the defects it caught and the good orders it rejected, and checks each surviving order total against the truth to the cent.
+## How it works
 
-## Pipeline stages
+| Stage | What it does |
+| --- | --- |
+| Ingest | Reads each file into the same raw record shape. Values stay as written, and every record points back to its line or element in the source file. |
+| Parse | Turns each raw value into a typed one. A parser returns the value, with a note if it had to repair something, or refuses it. |
+| Check | Looks at one order against the catalog and FX rates: unknown SKUs, quantities below 1, dates in the future, prices written in cents, repeated rows, header totals that disagree with the lines. |
+| Reconcile | Looks across orders. It finds each customer in the CRM, drops records a source sent twice, matches till pickups to their web orders, and converts totals to euros. |
+| Report | Writes clean `orders`, `lines` and `customers` tables, a quarantine file with reasons, a duplicates file, the full issue log and an HTML report. |
+| Score | A separate command. It reads only the output files and the ground truth, and grades the run. |
 
-After ingestion, each stage sees more than the one before: parsing looks at one value, checks at one order against the reference data, and reconciliation at all orders together.
+Every issue has a severity. An error means the order can't be trusted, so it goes to quarantine. A warning means something was wrong but the order is still usable, because the pipeline repaired the value or dropped one the order can do without. Info is worth knowing and needs no action.
 
-1. **Ingest.** One adapter per format, each producing the same raw record shape with lineage (file, row or element, raw value). Encoding detection, preamble skipping, nested-JSON flattening.
-2. **Parse.** Validate and clean every value in one pass. Each field goes through a reusable parser that either returns a typed value, logging any repair (SKU formats, emails, mojibake, text quantities, buyer codes), or rejects it. Number formats, time zones and cents are read according to each source's format.
-3. **Check.** Rules that need the whole order or the reference data: known SKUs, positive quantities, no dates in the future, a currency inferred from the customer's country when it's missing, 100x price slips against the catalog, repeated rows, and header totals against line sums.
-4. **Reconcile.** Resolve every customer against the CRM, drop repeated records such as webhook retries, match till pickups to their web orders (by reference, then by customer, items and timing), and convert every total to EUR. Each record ends up with one status: clean, quarantined, or a duplicate copy of another record.
-5. **Report.** Clean tables (`orders`, `lines`, `customers`), `quarantine.csv` with every reason, `duplicates.csv` with what each copy duplicates and how it was found, the full `issues.csv`, and an HTML data-quality report.
-6. **Score.** A separate command that reads only the output files and the ground truth, never pipeline code, and grades the run. It checks the outcome of every true order, every copy and every injected defect, and also catches false alarms, field-level errors and revenue drift.
+### Decisions worth explaining
 
-Every issue carries a severity. An **error** means the order can't be trusted and goes to quarantine. A **warning** means something was wrong but the order is still usable, because the pipeline repaired the value or dropped one the order can do without. **Info** is worth knowing but needs no action. Issues about an order travel with that order through every stage, so the final quarantine decision can see all of them.
+Adapters don't clean anything. `"10,50"`, `" BRK-0042 "` and `"2 pcs"` reach the parser as the source wrote them. Deciding what a value means is cleaning, and I want every cleaning step in the issue log with the original value next to it.
+
+Parsing fixes only what it can fix without guessing. `brk_42` can only mean `BRK-0042`, so the parser fixes it and logs the change. The till writes decimal commas, so `1.234,56` is fine, but `12.50` isn't a thousands grouping. The parser refuses it rather than read it as 1250.
+
+Orders with an error don't get repaired. An early version "fixed" the totals of orders with negative quantities by recomputing them from numbers it already knew were wrong. Now the validations run on every order, so the log shows every problem, and the repairs stop at the first error.
+
+A repeated line isn't automatically a duplicate, because people do buy the same part twice. The pipeline drops a repeat only when the order's own total says it shouldn't be there. When the header total and the lines disagree for any other reason, the lines win, since they're the more detailed record.
+
+The pipeline matches customers by buyer code or email, never by name. People type names by hand, which is how the data ends up with `NOVAK ŽIGA` and `Tomaz Krajnc`. Once it finds the customer, the order takes the CRM's spelling.
+
+For click-and-collect, the till receipt is the copy. The sale happened online, and counting both would double the revenue. The pipeline matches receipts with a valid `Ref` first. It then compares every receipt still unmatched with the web orders waiting for pickup: same customer, same items, same total, picked up within seven days. That only counts when exactly one web order fits. If two fit, the receipt stays a separate sale and gets a flag, because picking one would be a guess.
+
+The scorer never imports pipeline code. It reads the CSVs the run wrote and judges only those. It also counts false alarms, meaning errors and warnings on orders with no defect behind them. Without that, a pipeline that flagged everything would look thorough.
+
+The generator keeps its own copy of the business rules, like the time zone and which countries pay in which currency, instead of importing the pipeline's. If they shared one, a wrong rule would produce data that agrees with itself, and the scorer could never catch it.
+
+### Bugs the truth comparison caught
+
+Comparing every parsed value with the truth found bugs I wouldn't have spotted by reading the output.
+
+`Š` in UTF-8 is the bytes `C5 A0`, and `A0` in Windows-1252 is a non-breaking space. My parser tidied whitespace before undoing the mojibake, so `Å\xa0pela` became `Å pela` and could never be recovered.
+
+The generator had a bug of its own. It stripped the accents from "Ana Smith", which has none, and logged that as a defect. The ledger then listed one more defect than the pipeline had fixed, and the one it "missed" had changed nothing.
 
 ## Running it
+
+You need [uv](https://docs.astral.sh/uv/) and Python 3.12 or newer.
 
 ```bash
 uv run clearhouse generate
 ```
 
-This writes `data/raw`, `data/reference` and `data/truth`. The pipeline must never read `data/truth`; only the scorer does. `--seed` picks another dataset, and `--defect-rate` (default 0.2) sets the share of orders that get a defect.
+Writes `data/raw`, `data/reference` and `data/truth`. The pipeline never reads `data/truth`, only the scorer does. `--seed` gives a different dataset, and `--defect-rate` (default 0.2) sets the share of orders that get a defect.
 
 ```bash
 uv run clearhouse run
 ```
 
-Runs the pipeline over `data/raw`, prints what was found per source and a count of every issue by stage and code, and writes `out/report.html` plus the CSV tables. Orders dated after `--as-of` (default: today) are rejected as impossible.
+Runs the pipeline over `data/raw` and writes `out/report.html` and the CSV tables. Orders dated after `--as-of` (default: today) are rejected.
 
 ```bash
 uv run clearhouse score
 ```
 
-Grades `out/` against `data/truth`, prints the result and saves it to `out/score.md`. It exits with status 1 if anything is wrong, so it can gate CI.
+Grades `out/` against the truth, prints the result and saves it to `out/score.md`. It exits with status 1 if anything is off, so CI can fail on it.
 
-## Code tour
+## Limits
+
+The defects are the ones I thought to inject. Real exports break in ways nobody planned for, and this score says nothing about those.
+
+Each order gets at most one defect, so the pipeline has never seen an order that's broken in two ways at once.
+
+Matching a pickup without a `Ref` needs the same items and the same total. If a customer changes the order at the counter, the receipt and the web order both count as sales.
+
+The catalog, the CRM and the FX rates are trusted as given. A wrong list price would make the price check wrong too.
+
+Everything is held in memory. That's fine for a few thousand orders and wouldn't be for millions.
+
+## Development
+
+```bash
+uv run ruff check . && uv run mypy && uv run pytest
+```
+
+CI runs these on Python 3.12, 3.13 and 3.14. It then runs generate, run and score on three seeds at two defect rates. Each score shows up on the run's summary page, and each report is saved as an artifact.
+
+## Where things are
 
 | Module | What it does |
 | --- | --- |
@@ -116,71 +166,3 @@ Grades `out/` against `data/truth`, prints the result and saves it to `out/score
 | [`export.py`](src/clearhouse/export.py), [`report/`](src/clearhouse/report) | The CSV deliverables and the HTML report |
 | [`score.py`](src/clearhouse/score.py) | Grades a run's output files against the ground truth |
 | [`model.py`](src/clearhouse/model.py), [`issues.py`](src/clearhouse/issues.py) | The order record, and the issue every stage logs against it |
-
-## Development
-
-```bash
-uv run ruff check . && uv run mypy && uv run pytest
-```
-
-Ruff fails on unused imports and variables, and mypy checks the whole package in strict mode. CI ([`ci.yml`](.github/workflows/ci.yml)) runs all three on Python 3.12, 3.13 and 3.14. It then runs the full generate, run and score cycle on three seeds, each at the default and a dense defect rate. Every score lands on the run's summary page, and every report is kept as a downloadable artifact.
-
-## How ingestion works
-
-Each adapter knows one format and nothing else. It maps that format's fields onto a shared `RawOrder` / `RawLine` shape and tags every record with where it came from (`line 214`, `orders[37].items[1]`, `Order[12]/Line[3]`), so any problem found later can be traced back to the exact spot in the source file.
-
-Adapters keep each value as written. `"10,50"`, `" BRK-0042 "` and `"2 pcs"` reach the next stage untouched, because deciding what they mean is cleaning, and cleaning should be logged. The webshop reader parses JSON numbers as strings, so `23.0` stays `"23.0"` instead of becoming a float. Adapters interpret only what the format itself implies: wholesale prices in cents are recorded with `price_scale = 100` rather than divided, and orders from the till and the wholesale feed, which have no currency field, are marked as euros.
-
-Adapters don't trust their input's structure either. The till reader finds its header by column names rather than position, so a preamble, reordered or extra columns, or a different delimiter don't break it. It tries strict UTF-8 before cp1250, and checks the footer's row count against the rows it read, which catches truncated exports. Webshop and wholesale readers report fields they don't recognise, which is usually the first sign an upstream system changed its schema. Files that no adapter claims are reported, not ignored.
-
-## How parsing works
-
-Parsers live in [`parse/fields.py`](src/clearhouse/parse/fields.py) and know nothing about sources. Each source format picks and configures them: the till's timestamps are `%d.%m.%Y %H:%M` in Ljubljana time with decimal commas, the webshop's are ISO 8601 or epoch milliseconds, the wholesale feed's are bare dates with prices in cents. Adding a source means describing its format, not writing new parsing code.
-
-One rule decides severity. A required field (order id, date, and each line's SKU, quantity and price) that is missing or unparseable is an error, because the order can't be trusted without it. An optional field that fails to parse is dropped with a warning, because the order is still sound. A value that only needed tidying is kept and the repair logged, with the original value alongside it.
-
-Parsing fixes only what it can fix without guessing. `brk_42` can only mean `BRK-0042`, and `Å½iga` can only mean `Žiga`. `NOVAK ŽIGA` might or might not be the CRM's Žiga Novak, so reconciliation settles that by checking the email. A decimal-comma source gets the same caution: `1.234,56` is fine, but `12.50` isn't a thousands grouping, so the till reader refuses it rather than reading 1250.
-
-The tests compare parsed values against the ground truth for every order whose defects parsing alone should recover, on two different seeds. That comparison found a real bug while this stage was being built: `Š` in UTF-8 is the bytes `C5 A0`, and `A0` in Windows-1252 is a non-breaking space, so tidying whitespace before undoing mojibake turned `Å\xa0pela` into an unrecoverable `Å pela`.
-
-## How checks work
-
-[`check.py`](src/clearhouse/check.py) runs two kinds of rule. Validations (future dates, unknown SKUs, quantities below 1) only report, and run on every order so the issue log lists every problem at once. Repairs change the order, and stop as soon as it has an error. An order headed for quarantine isn't worth repairing, and repairing it can do harm: an early version "fixed" the totals of orders with negative quantities, rewriting them from numbers already known to be wrong.
-
-Repairs run in a fixed order because each one makes the next more reliable. Prices are compared with the catalog in euros, using that month's exchange rate, and a price around 100 times the list price is read as cents. Only then are repeated lines judged. A repeat on its own proves nothing, since someone can buy the same part twice on separate lines, so it's only dropped when the order's own header total excludes it. Last, the header total is compared with the sum of the lines, and the lines win because they're the more detailed record.
-
-The tests check that the orders this stage rejects are the ones the ledger quarantines, with no misses and no false alarms, and that each recoverable order matches the ground truth field for field.
-
-## How reconciliation works
-
-[`reconcile.py`](src/clearhouse/reconcile.py) makes the decisions that need more than one record at a time.
-
-Customers are identified by buyer code or email, never by name, because names are typed by hand. Once a customer is found in the CRM, the order takes the CRM's spelling, which is how `NOVAK ŽIGA` and `Tomaz Krajnc` become `Žiga Novak` and `Tomaž Krajnc`.
-
-When a source sends the same order id twice, the first record wins and an identical later one is marked as its copy. If the two records differ, nobody can say which is right, so the order goes to quarantine.
-
-Click-and-collect orders are recorded twice: once by the webshop when they're placed, and again by the till when the customer picks them up. The till receipt counts as the copy, because the sale happened online and counting both would double the revenue. Receipts carrying the web order number in `Ref` are matched first. Every receipt still unmatched, including one whose `Ref` doesn't check out, is then matched on the same customer, items and total within a seven-day pickup window, but only when exactly one web order fits. A mistyped `Ref` therefore can't double count a sale. When two web orders fit equally well, the receipt stays its own sale and gets a flag, because picking one would be a guess.
-
-The tests check the whole pipeline end to end: the copies it drops are the ledger's duplicates, paired with the right originals, and every true order survives exactly once with the outcome the ledger expects. Every clean order matches the ground truth down to its CRM customer and its euro total. Breaking the matcher on purpose (skipping the no-`Ref` pass, shrinking the pickup window, keeping typed names) makes those tests fail.
-
-## How scoring works
-
-[`score.py`](src/clearhouse/score.py) reads files only, so it judges what the pipeline delivered rather than how. It checks five things:
-
-- **Outcomes.** Every true order must appear exactly once, clean or quarantined as the ledger expects. Lost orders, orders counted twice, and output records that aren't real orders are each counted separately.
-- **Copies.** Every duplicate record must be removed and paired with the right original.
-- **Defects.** Each injected defect must be noticed with an issue code that signals its kind, then treated right. A defect that should quarantine leaves its order in quarantine. One that should be fixed leaves the order clean, with every field equal to the truth.
-- **False alarms.** Any error or warning on an order with no defect behind it counts against the run. Without this check, a pipeline that flagged everything would look thorough.
-- **Fields.** Every clean order is compared with the truth on its date and time, customer, currency, total, euro total and every line, and the clean revenue has to match to the cent.
-
-A scorer that always says "perfect" is worthless, so the tests take a correct run's output and break it in seven ways: losing a quarantined order, counting an order twice, inventing an order, dropping a duplicate pairing, changing a euro total, deleting the evidence of a repair, and raising a warning nothing explains. Each time, the scorer has to name the problem.
-
-## Build log
-
-- [x] Step 1: ground-truth world and messy data generator with defect ledger
-- [x] Step 2: ingestion adapters
-- [x] Step 3: field parsing (validate and clean each value)
-- [x] Step 4: order checks against reference data
-- [x] Step 5: reconciliation
-- [x] Step 6: report and scoring
-- [x] Step 7: CI and polish
