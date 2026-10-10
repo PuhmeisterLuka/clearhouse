@@ -44,6 +44,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.12"
+          # The Python 3.12 test job saves this same cache; seven jobs racing to save one key makes six warnings.
+          save-cache: false
       - run: uv sync --locked
       - run: uv run clearhouse generate --seed ${{ matrix.seed }} --defect-rate ${{ matrix.defect-rate }}
       - run: uv run clearhouse run
