@@ -40,14 +40,20 @@ Rule = Callable[[Order, CheckContext], None]
 
 
 def lines_total(lines: Iterable[Line]) -> Decimal | None:
-    totals = [line.total for line in lines]
-    return None if None in totals else sum(totals, Decimal("0.00"))
+    """The sum of the line totals, or None when any line is missing its price or quantity."""
+    total = Decimal("0.00")
+    for line in lines:
+        amount = line.total
+        if amount is None:
+            return None
+        total += amount
+    return total
 
 
 def currency_for_country(country: str | None) -> str | None:
-    if country in EUROZONE:
-        return "EUR"
-    return WEB_CURRENCY.get(country)
+    if country is None:
+        return None
+    return "EUR" if country in EUROZONE else WEB_CURRENCY.get(country)
 
 
 def check_not_future(order: Order, ctx: CheckContext) -> None:
@@ -109,7 +115,7 @@ def drop_duplicate_lines(order: Order, ctx: CheckContext) -> None:
     """
     unique: list[Line] = []
     repeats: list[Line] = []
-    seen: set[tuple] = set()
+    seen: set[tuple[str | None, int | None, Decimal | None]] = set()
     for line in order.lines:
         key = (line.sku, line.qty, line.unit_price)
         (repeats if key in seen else unique).append(line)

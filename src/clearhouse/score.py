@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 # The issue codes that show the pipeline noticed each kind of injected defect.
 SIGNALS: dict[str, set[str]] = {
@@ -42,6 +42,7 @@ COPY_KINDS = {"duplicate_order", "cross_channel_duplicate"}  # defects that add 
 FIELDS = ("placed", "customer_id", "customer_name", "currency", "total", "total_eur", "lines")
 
 type LineKey = tuple[str, int, Decimal]
+type Defect = dict[str, Any]  # one row of the generator's defect ledger
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:
@@ -60,7 +61,7 @@ def group_lines(rows: list[dict[str, str]], key: str) -> dict[str, list[LineKey]
     return lines
 
 
-def flagged_ref(defect: dict) -> str:
+def flagged_ref(defect: Defect) -> str:
     """The record whose issues should show the defect: the till receipt for a pickup copy, else the order."""
     return f"{defect['source']}:{defect['copy_id']}" if "copy_id" in defect else defect["order_key"]
 
@@ -68,7 +69,7 @@ def flagged_ref(defect: dict) -> str:
 @dataclass
 class Truth:
     data: Path
-    ledger: list[dict]
+    ledger: list[Defect]
     kinds: dict[str, set[str]]  # order key -> defect kinds injected into it
     orders: dict[str, dict[str, str]]
     lines: dict[str, list[LineKey]]
@@ -206,7 +207,7 @@ def judge_outcomes(truth: Truth, outcomes: dict[str, list[str]]) -> tuple[int, l
     return right, lost, wrong, twice
 
 
-def judge_defect(defect: dict, output: Output, outcomes: dict[str, list[str]], codes: dict[str, set[str]],
+def judge_defect(defect: Defect, output: Output, outcomes: dict[str, list[str]], codes: dict[str, set[str]],
                  comparisons: dict[str, dict[str, bool]]) -> bool:
     """Handled means noticed with the right code and given the right treatment, with nothing else off."""
     if defect["kind"] in COPY_KINDS:

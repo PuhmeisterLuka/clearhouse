@@ -43,8 +43,8 @@ def customer_rows(clean: list[Order]) -> Iterator[list[Any]]:
             by_customer[o.customer_id].append(o)
     for customer_id in sorted(by_customer):
         orders = by_customer[customer_id]
-        dates = sorted(o.placed_date for o in orders)
-        yield [customer_id, orders[0].customer_name, len(orders), sum((o.total_eur for o in orders), Decimal(0)),
+        dates = sorted(o.placed_date for o in orders if o.placed_date is not None)
+        yield [customer_id, orders[0].customer_name, len(orders), sum((o.value_eur for o in orders), Decimal(0)),
                dates[0], dates[-1], " ".join(sorted({o.source for o in orders}))]
 
 

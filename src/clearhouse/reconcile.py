@@ -92,28 +92,29 @@ def within_pickup_window(receipt: Order, web: Order) -> bool:
     return timedelta(0) <= receipt.placed_at - web.placed_at <= PICKUP_WINDOW
 
 
-def match_by_ref(receipt: Order, waiting: dict[str, Order]) -> None:
-    web = waiting.get(receipt.ref)
+def match_by_ref(receipt: Order, ref: str, waiting: dict[str, Order]) -> None:
+    web = waiting.get(ref)
     if web is None:
         receipt.log(STAGE, "info", "pickup.unknown_ref", "Ref isn't a click-and-collect order awaiting pickup",
-                    value=receipt.ref)
+                    value=ref)
     elif not same_sale(receipt, web):
         receipt.log(STAGE, "info", "pickup.ref_mismatch", f"Ref points at {web.order_ref}, but the sale differs",
-                    value=receipt.ref)
+                    value=ref)
     else:
-        del waiting[web.native_id]
+        del waiting[ref]
         mark_copy(receipt, web, PICKUP_COPY, f"till copy of {web.order_ref}, matched by its Ref")
 
 
 def match_by_sale(receipt: Order, waiting: dict[str, Order]) -> None:
-    candidates = [web for web in waiting.values() if same_sale(receipt, web) and within_pickup_window(receipt, web)]
+    candidates = [(web_id, web) for web_id, web in waiting.items()
+                  if same_sale(receipt, web) and within_pickup_window(receipt, web)]
     if len(candidates) == 1:
-        web = candidates[0]
-        del waiting[web.native_id]
+        web_id, web = candidates[0]
+        del waiting[web_id]
         mark_copy(receipt, web, PICKUP_COPY,
                   f"till copy of {web.order_ref}, matched by customer, items and timing (no Ref)")
     elif candidates:
-        refs = ", ".join(web.order_ref for web in candidates)
+        refs = ", ".join(web.order_ref for _, web in candidates)
         receipt.log(STAGE, "info", "pickup.ambiguous", f"could be a copy of any of {refs}, kept as its own sale")
 
 
@@ -122,12 +123,12 @@ def match_pickups(orders: list[Order]) -> None:
 
     Receipts with a Ref are matched first, so a guess can never take a web order a Ref points at.
     """
-    waiting = {o.native_id: o for o in orders
-               if o.source == "web" and o.fulfillment == "click_and_collect" and o.duplicate_of is None}
+    waiting = {o.native_id: o for o in orders if o.native_id is not None
+               and o.source == "web" and o.fulfillment == "click_and_collect" and o.duplicate_of is None}
     till = [o for o in orders if o.source == "pos" and o.duplicate_of is None]
     for receipt in till:
         if receipt.ref is not None:
-            match_by_ref(receipt, waiting)
+            match_by_ref(receipt, receipt.ref, waiting)
     for receipt in till:
         if receipt.ref is None and receipt.customer_email is not None:
             match_by_sale(receipt, waiting)

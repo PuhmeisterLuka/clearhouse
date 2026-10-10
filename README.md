@@ -1,5 +1,7 @@
 # Clearhouse
 
+[![CI](https://github.com/PuhmeisterLuka/clearhouse/actions/workflows/ci.yml/badge.svg)](https://github.com/PuhmeisterLuka/clearhouse/actions/workflows/ci.yml)
+
 A data pipeline that takes order exports from three systems that disagree about everything, works out what actually happened, and proves how well it did.
 
 ![The HTML data-quality report the pipeline writes](docs/report.jpg)
@@ -100,13 +102,28 @@ uv run clearhouse score
 
 Grades `out/` against `data/truth`, prints the result and saves it to `out/score.md`. It exits with status 1 if anything is wrong, so it can gate CI.
 
+## Code tour
+
+| Module | What it does |
+| --- | --- |
+| [`generate/truth.py`](src/clearhouse/generate/truth.py) | The clean world: catalog, customers, FX rates and orders |
+| [`generate/mess.py`](src/clearhouse/generate/mess.py) | Defect injectors, the three format writers and the ledger |
+| [`ingest/`](src/clearhouse/ingest) | One adapter per source format, all producing the same raw records |
+| [`parse/`](src/clearhouse/parse) | Reusable field parsers, and each source's format |
+| [`check.py`](src/clearhouse/check.py) | Order rules against the catalog and FX rates |
+| [`reconcile.py`](src/clearhouse/reconcile.py) | CRM customers, repeated records, till pickups, euro totals |
+| [`pipeline.py`](src/clearhouse/pipeline.py) | Runs ingest, parse, check and reconcile in order |
+| [`export.py`](src/clearhouse/export.py), [`report/`](src/clearhouse/report) | The CSV deliverables and the HTML report |
+| [`score.py`](src/clearhouse/score.py) | Grades a run's output files against the ground truth |
+| [`model.py`](src/clearhouse/model.py), [`issues.py`](src/clearhouse/issues.py) | The order record, and the issue every stage logs against it |
+
 ## Development
 
-Tests and lint (ruff covers unused imports and variables, so dead code fails the check):
-
 ```bash
-uv run pytest && uv run ruff check .
+uv run ruff check . && uv run mypy && uv run pytest
 ```
+
+Ruff catches unused imports and variables, so dead code fails the lint, and mypy checks the whole package in strict mode. CI ([`ci.yml`](.github/workflows/ci.yml)) runs all three on Python 3.12, 3.13 and 3.14. It then runs the full generate, run and score cycle on three seeds, each at the default and a dense defect rate. Every score lands on the run's summary page, and every report is kept as a downloadable artifact.
 
 ## How ingestion works
 
@@ -166,4 +183,4 @@ A scorer that always says "perfect" is worthless, so the tests take a correct ru
 - [x] Step 4: order checks against reference data
 - [x] Step 5: reconciliation
 - [x] Step 6: report and scoring
-- [ ] Step 7: CI and polish
+- [x] Step 7: CI and polish

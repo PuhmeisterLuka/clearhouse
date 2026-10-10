@@ -88,6 +88,13 @@ class Line:
 
 
 @dataclass
+class Pickup:
+    """A click-and-collect web order being rung through the till when the customer collects it."""
+    at: datetime  # tz-aware UTC
+    receipt: str = ""  # the till's receipt number, given out by number_receipts
+
+
+@dataclass
 class Order:
     channel: str
     native_id: str
@@ -95,8 +102,7 @@ class Order:
     placed_at: datetime  # tz-aware UTC
     currency: str
     lines: list[Line]
-    pickup_at: datetime | None = None  # click-and-collect web orders get rung through the till on pickup
-    pos_receipt: str | None = None  # the till's receipt number for that pickup
+    pickup: Pickup | None = None  # set for click-and-collect web orders
 
     @property
     def key(self) -> str:
@@ -108,7 +114,7 @@ class Order:
 
     @property
     def collect_in_store(self) -> bool:
-        return self.pickup_at is not None
+        return self.pickup is not None
 
 
 @dataclass
@@ -218,7 +224,7 @@ def web_orders(rng: random.Random, world: World, n: int) -> list[Order]:
         order = Order("web", str(web_id), customer, when, currency, lines)
         if customer.country == "SI" and rng.random() < PICKUP_SHARE:
             pickup_day = when.astimezone(LOCAL_TZ).date() + timedelta(days=rng.randint(1, 3))
-            order.pickup_at = local_moment(rng, pickup_day, SHOP_HOURS)
+            order.pickup = Pickup(local_moment(rng, pickup_day, SHOP_HOURS))
         orders.append(order)
     return orders
 
@@ -235,15 +241,15 @@ def wholesale_orders(rng: random.Random, world: World, n: int) -> list[Order]:
 
 def number_receipts(rng: random.Random, orders: list[Order]) -> None:
     """Till receipt numbers run in time order across walk-in sales and pickups alike."""
-    visits = [(o.placed_at, o) for o in orders if o.channel == "pos"]
-    visits += [(o.pickup_at, o) for o in orders if o.pickup_at]
+    visits: list[tuple[datetime, Order | Pickup]] = [(o.placed_at, o) for o in orders if o.channel == "pos"]
+    visits += [(o.pickup.at, o.pickup) for o in orders if o.pickup]
     receipt = 1000
-    for _, order in sorted(visits, key=lambda v: v[0]):
+    for _, visit in sorted(visits, key=lambda v: v[0]):
         receipt += rng.randint(1, 3)
-        if order.channel == "pos":
-            order.native_id = f"R-{receipt}"
+        if isinstance(visit, Pickup):
+            visit.receipt = f"R-{receipt}"
         else:
-            order.pos_receipt = f"R-{receipt}"
+            visit.native_id = f"R-{receipt}"
 
 
 def build_world(seed: int = 7, n_pos: int = 450, n_web: int = 650, n_wholesale: int = 120) -> World:

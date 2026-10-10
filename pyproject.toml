@@ -10,7 +10,7 @@ dependencies = []
 clearhouse = "clearhouse.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=2.4"]
 
 [build-system]
 requires = ["hatchling"]
@@ -18,6 +18,10 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
 
 [tool.ruff]
 line-length = 120

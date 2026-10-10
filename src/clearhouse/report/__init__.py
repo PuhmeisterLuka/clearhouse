@@ -84,7 +84,7 @@ def code_table(issues: list[Issue]) -> str:
 
 def kpis(run: Run) -> str:
     status = Counter(o.status for o in run.orders)
-    revenue = sum((o.total_eur for o in run.with_status("clean")), Decimal(0))
+    revenue = sum((o.value_eur for o in run.with_status("clean")), Decimal(0))
     tiles = [("Records read", num(len(run.orders))), ("Clean orders", num(status["clean"])),
              ("Quarantined", num(status["quarantined"])), ("Duplicate copies removed", num(status["duplicate"])),
              ("Values repaired", num(len(run.repairs()))), ("Clean revenue", compact_eur(revenue))]
@@ -117,7 +117,7 @@ def outcomes(run: Run) -> str:
     for o in run.orders:
         counts[o.source][o.status] += 1
         if o.status == "clean":
-            revenue[o.source] += o.total_eur
+            revenue[o.source] += o.value_eur
     sources = [s.stats for s in run.sources if s.stats.orders]
 
     legend = '<ul class="legend">' + "".join(

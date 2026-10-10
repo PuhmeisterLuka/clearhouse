@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and test (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run mypy
+      - run: uv run pytest
+
+  score:
+    # The scorer exits non-zero on any problem, so a pipeline regression fails the build here.
+    name: Score (seed ${{ matrix.seed }}, defect rate ${{ matrix.defect-rate }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [7, 42, 2026]
+        defect-rate: ["0.2", "0.8"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run clearhouse generate --seed ${{ matrix.seed }} --defect-rate ${{ matrix.defect-rate }}
+      - run: uv run clearhouse run
+      - name: Score against the ground truth
+        run: uv run clearhouse score >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: report-seed${{ matrix.seed }}-rate${{ matrix.defect-rate }}
+          path: out/
+          retention-days: 14

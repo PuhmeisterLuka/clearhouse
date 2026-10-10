@@ -25,7 +25,7 @@ from typing import Any
 
 from ..files import write_csv, write_jsonl
 from ..text import ascii_fold
-from .truth import LOCAL_TZ, YEAR, Order, World
+from .truth import LOCAL_TZ, YEAR, Order, Pickup, World
 
 DEFAULT_DEFECT_RATE = 0.2  # share of orders that get a defect
 PICKUP_REF_RATE = 0.7  # how often till staff type the web order number into Ref
@@ -49,12 +49,14 @@ BAD_DATES = {
 }
 TOTAL_ERRORS = [Decimal(x) for x in ("1", "5", "10", "-2", "0.99", "12.40")]
 
+type Detail = dict[str, Any]  # what a ledger entry records about one defect
+
 
 # Ledger and drafts
 
 @dataclass
 class Ledger:
-    rows: list[dict] = field(default_factory=list)
+    rows: list[Detail] = field(default_factory=list)
 
     def add(self, kind: str, order: Order, source: str, **detail: Any) -> None:
         self.rows.append({"defect_id": f"D{len(self.rows) + 1:04d}", "kind": kind, "order_key": order.key,
@@ -74,6 +76,7 @@ class Draft:
     name: str
     email: str
     code: str
+    country: str
     currency: str | None
     total: Decimal
     lines: list[dict[str, Any]]
@@ -84,10 +87,10 @@ class Draft:
     @classmethod
     def of(cls, order: Order, source: str) -> Draft:
         c = order.customer
-        return cls(order, source, order.native_id, order.placed_at,
-                   c.name if c else "", c.email if c else "", c.customer_id if c else "",
-                   order.currency, order.total,
-                   [{"sku": ln.sku, "qty": ln.qty, "price": ln.unit_price} for ln in order.lines])
+        return cls(order=order, source=source, native_id=order.native_id, placed_at=order.placed_at,
+                   name=c.name if c else "", email=c.email if c else "", code=c.customer_id if c else "",
+                   country=c.country if c else "", currency=order.currency, total=order.total,
+                   lines=[{"sku": ln.sku, "qty": ln.qty, "price": ln.unit_price} for ln in order.lines])
 
     def date_text(self, fmt: str) -> str:
         return self.raw_date if self.raw_date is not None else self.placed_at.astimezone(LOCAL_TZ).strftime(fmt)
@@ -101,7 +104,7 @@ def pick_variant(rng: random.Random, original: str, variants: list[str]) -> str 
     return rng.choice(different) if different else None
 
 
-def inject_sku_variant(d: Draft, rng: random.Random) -> dict | None:
+def inject_sku_variant(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     true_sku = line["sku"]
     prefix, num = true_sku.split("-")
@@ -113,82 +116,82 @@ def inject_sku_variant(d: Draft, rng: random.Random) -> dict | None:
     return {"true_sku": true_sku, "value": variant}
 
 
-def inject_unknown_sku(d: Draft, rng: random.Random) -> dict | None:
+def inject_unknown_sku(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     # The catalog only uses numbers below 400, so these can never match.
     line["sku"] = f"{line['sku'][:3]}-{rng.randint(400, 999):04d}"
     return {"value": line["sku"]}
 
 
-def inject_missing_sku(d: Draft, rng: random.Random) -> dict | None:
+def inject_missing_sku(d: Draft, rng: random.Random) -> Detail | None:
     return {"true_sku": rng.choice(d.lines).pop("sku")}
 
 
-def inject_missing_qty(d: Draft, rng: random.Random) -> dict | None:
+def inject_missing_qty(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     del line["qty"]
     return {"sku": line["sku"]}
 
 
-def inject_negative_qty(d: Draft, rng: random.Random) -> dict | None:
+def inject_negative_qty(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     line["qty"] = -line["qty"]
     return {"sku": line["sku"], "value": line["qty"]}
 
 
-def inject_qty_text(d: Draft, rng: random.Random) -> dict | None:
+def inject_qty_text(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     line["qty"] = rng.choice([f"{line['qty']} pcs", f"{line['qty']}x", f" {line['qty']} "])
     return {"value": line["qty"]}
 
 
-def inject_price_cents_error(d: Draft, rng: random.Random) -> dict | None:
+def inject_price_cents_error(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     true_price = line["price"]
     line["price"] = true_price * 100
     return {"sku": line["sku"], "true_price": str(true_price), "value": str(line["price"])}
 
 
-def inject_euro_price_variant(d: Draft, rng: random.Random) -> dict | None:
+def inject_euro_price_variant(d: Draft, rng: random.Random) -> Detail | None:
     line = rng.choice(d.lines)
     line["price_in_euros"] = True
     return {"sku": line["sku"], "value": str(line["price"])}
 
 
-def inject_duplicate_row(d: Draft, rng: random.Random) -> dict | None:
+def inject_duplicate_row(d: Draft, rng: random.Random) -> Detail | None:
     i = rng.randrange(len(d.lines))
     d.lines.insert(i + 1, dict(d.lines[i]))
     return {"sku": d.lines[i]["sku"]}
 
 
-def inject_duplicate_order(d: Draft, rng: random.Random) -> dict | None:
+def inject_duplicate_order(d: Draft, rng: random.Random) -> Detail | None:
     d.copies = 2
     return {}
 
 
-def inject_total_mismatch(d: Draft, rng: random.Random) -> dict | None:
+def inject_total_mismatch(d: Draft, rng: random.Random) -> Detail | None:
     true_total = d.total
     d.total += rng.choice(TOTAL_ERRORS)
     return {"true_total": str(true_total), "written": str(d.total)}
 
 
-def inject_bad_date(d: Draft, rng: random.Random) -> dict | None:
+def inject_bad_date(d: Draft, rng: random.Random) -> Detail | None:
     d.raw_date = rng.choice(BAD_DATES[d.source])
     return {"value": d.raw_date}
 
 
-def inject_future_date(d: Draft, rng: random.Random) -> dict | None:
+def inject_future_date(d: Draft, rng: random.Random) -> Detail | None:
     d.placed_at = d.placed_at.replace(year=YEAR + 6)
     return {"value": d.placed_at.isoformat()}
 
 
-def inject_missing_currency(d: Draft, rng: random.Random) -> dict | None:
+def inject_missing_currency(d: Draft, rng: random.Random) -> Detail | None:
     true_currency = d.currency
     d.currency = rng.choice([None, ""])
     return {"true_currency": true_currency}
 
 
-def inject_email_noise(d: Draft, rng: random.Random) -> dict | None:
+def inject_email_noise(d: Draft, rng: random.Random) -> Detail | None:
     if not d.email:
         return None
     variant = pick_variant(rng, d.email, [d.email.upper(), f" {d.email}", f"{d.email}  ", d.email.title()])
@@ -198,7 +201,7 @@ def inject_email_noise(d: Draft, rng: random.Random) -> dict | None:
     return {"value": variant}
 
 
-def inject_name_variant(d: Draft, rng: random.Random) -> dict | None:
+def inject_name_variant(d: Draft, rng: random.Random) -> Detail | None:
     if not d.name:
         return None
     first, last = d.name.split(" ", 1)
@@ -209,7 +212,7 @@ def inject_name_variant(d: Draft, rng: random.Random) -> dict | None:
     return {"value": variant}
 
 
-def inject_mojibake(d: Draft, rng: random.Random) -> dict | None:
+def inject_mojibake(d: Draft, rng: random.Random) -> Detail | None:
     """UTF-8 bytes read back as Windows-1252, the classic 'Å½iga' for 'Žiga'."""
     if d.name.isascii():
         return None
@@ -221,7 +224,7 @@ def inject_mojibake(d: Draft, rng: random.Random) -> dict | None:
     return {"true_name": true_name, "value": broken}
 
 
-def inject_buyer_code_noise(d: Draft, rng: random.Random) -> dict | None:
+def inject_buyer_code_noise(d: Draft, rng: random.Random) -> Detail | None:
     variant = pick_variant(rng, d.code, [d.code.lower(), f" {d.code} ", d.code.replace("B", "B-")])
     if variant is None:
         return None
@@ -229,7 +232,9 @@ def inject_buyer_code_noise(d: Draft, rng: random.Random) -> dict | None:
     return {"value": variant}
 
 
-INJECTORS: dict[str, Callable[[Draft, random.Random], dict | None]] = {
+type Injector = Callable[[Draft, random.Random], Detail | None]
+
+INJECTORS: dict[str, Injector] = {
     "sku_variant": inject_sku_variant,
     "unknown_sku": inject_unknown_sku,
     "missing_sku": inject_missing_sku,
@@ -275,17 +280,17 @@ POS_HEADER = ["Racun", "Datum", "Kupec", "E-posta", "Ref", "Artikel", "Kolicina"
 def eu_number(d: Decimal) -> str:
     """1234.5 -> '1.234,50', how the till formats money."""
     whole, frac = f"{abs(d):.2f}".split(".")
-    groups = []
+    groups: list[str] = []
     while whole:
         groups.insert(0, whole[-3:])
         whole = whole[:-3]
     return f"{'-' if d < 0 else ''}{'.'.join(groups)},{frac}"
 
 
-def pickup_draft(order: Order, mess: Mess) -> Draft:
+def pickup_draft(order: Order, pickup: Pickup, mess: Mess) -> Draft:
     """The till's copy of a click-and-collect web order, rung up when the customer collects it."""
     d = Draft.of(order, "pos")
-    d.native_id, d.placed_at = order.pos_receipt, order.pickup_at
+    d.native_id, d.placed_at = pickup.receipt, pickup.at
     has_ref = mess.rng.random() < PICKUP_REF_RATE
     d.ref = order.native_id if has_ref else ""
     mess.ledger.add("cross_channel_duplicate", order, "pos", copy_id=d.native_id, ref_present=has_ref)
@@ -306,8 +311,8 @@ def write_pos(world: World, mess: Mess, path: Path) -> None:
             d = Draft.of(order, "pos")
             mess.maybe_inject(d, POS_DEFECTS)
             drafts.append(d)
-        elif order.collect_in_store:
-            drafts.append(pickup_draft(order, mess))
+        elif order.pickup:
+            drafts.append(pickup_draft(order, order.pickup, mess))
     rows = [row for d in sorted(drafts, key=lambda d: d.placed_at) for row in pos_rows(d)]
 
     buf = io.StringIO()
@@ -342,7 +347,7 @@ def web_record(d: Draft, rng: random.Random) -> dict[str, Any]:
     return {
         "id": int(d.native_id) if rng.random() < 0.7 else d.native_id,
         "created_at": d.raw_date if d.raw_date is not None else web_timestamp(d.placed_at, rng),
-        "customer": {"name": d.name, "email": d.email, "country": d.order.customer.country},
+        "customer": {"name": d.name, "email": d.email, "country": d.country},
         "currency": d.currency,
         "items": [web_item(ln, rng) for ln in d.lines],
         "total": float(d.total),
@@ -350,15 +355,15 @@ def web_record(d: Draft, rng: random.Random) -> dict[str, Any]:
     }
 
 
-def swap_neighbours(items: list, rng: random.Random, p: float) -> None:
+def swap_neighbours[T](items: list[T], rng: random.Random, p: float) -> None:
     for i in range(0, len(items) - 1, 2):
         if rng.random() < p:
             items[i], items[i + 1] = items[i + 1], items[i]
 
 
 def write_web(world: World, mess: Mess, path: Path) -> None:
-    records: list[dict] = []
-    retries: list[tuple[int, dict]] = []
+    records: list[dict[str, Any]] = []
+    retries: list[tuple[int, dict[str, Any]]] = []
     for order in (o for o in world.orders if o.channel == "web"):
         d = Draft.of(order, "web")
         # Pickups stay clean here so their till copy is the only thing to reconcile.
@@ -385,7 +390,7 @@ def cents(amount: Decimal) -> int:
 
 
 def wholesale_line(line: dict[str, Any]) -> dict[str, str]:
-    attrs = {key: str(line[key]) for key in ("sku", "qty") if key in line}
+    attrs: dict[str, str] = {key: str(line[key]) for key in ("sku", "qty") if key in line}
     if line.get("price_in_euros"):
         attrs["unitPrice"] = str(line["price"])
     else:
@@ -433,7 +438,7 @@ TRUTH_ORDER_COLUMNS = ["order_key", "channel", "native_id", "customer_id", "plac
 def truth_order_row(world: World, order: Order, quarantined: set[str]) -> list[Any]:
     return [order.key, order.channel, order.native_id, order.customer.customer_id if order.customer else "",
             order.placed_at.strftime("%Y-%m-%dT%H:%M:%SZ"), order.placed_at.astimezone(LOCAL_TZ).date(),
-            order.currency, order.total, world.total_eur(order), order.pos_receipt or "",
+            order.currency, order.total, world.total_eur(order), order.pickup.receipt if order.pickup else "",
             "quarantine" if order.key in quarantined else "clean"]
 
 

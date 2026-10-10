@@ -69,27 +69,38 @@ def cmd_score(args: argparse.Namespace) -> None:
     sys.exit(1 if result.problems() else 0)
 
 
+PATHS = {
+    "data": "folder holding raw/, reference/ and truth/ (default: data)",
+    "out": "folder for the report, CSV tables and score (default: out)",
+}
+
+
+def add_paths(parser: argparse.ArgumentParser, *names: str) -> None:
+    for name in names:
+        parser.add_argument(f"--{name}", default=name, help=PATHS[name])
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="clearhouse")
+    parser = argparse.ArgumentParser(
+        prog="clearhouse",
+        description="Generate messy order exports, reconcile them, and grade the result against the truth.")
     sub = parser.add_subparsers(required=True)
 
     gen = sub.add_parser("generate", help="build the messy source files and their ground truth")
-    gen.add_argument("--data", default="data")
-    gen.add_argument("--seed", type=int, default=7)
+    add_paths(gen, "data")
+    gen.add_argument("--seed", type=int, default=7, help="the same seed always gives the same files (default: 7)")
     gen.add_argument("--defect-rate", type=share, default=DEFAULT_DEFECT_RATE,
                      help=f"share of orders that get a defect, 0 to 1 (default: {DEFAULT_DEFECT_RATE})")
     gen.set_defaults(func=cmd_generate)
 
     run = sub.add_parser("run", help="run the pipeline over data/raw and write its outputs")
-    run.add_argument("--data", default="data")
-    run.add_argument("--out", default="out")
+    add_paths(run, "data", "out")
     run.add_argument("--as-of", type=date.fromisoformat, default=date.today(),
                      help="latest plausible order date, YYYY-MM-DD (default: today)")
     run.set_defaults(func=cmd_run)
 
     grade = sub.add_parser("score", help="grade a run's outputs against the generator's ground truth")
-    grade.add_argument("--data", default="data")
-    grade.add_argument("--out", default="out")
+    add_paths(grade, "data", "out")
     grade.set_defaults(func=cmd_score)
 
     args = parser.parse_args()

@@ -69,15 +69,15 @@ def check_footer(result: SourceResult, row: list[str], data_rows: int, loc: str)
                      f"footer says {claimed} rows but {data_rows} were read, the file may be truncated", loc)
 
 
-def add_line(result: SourceResult, orders: dict[str, RawOrder], cell: dict[str, str | None],
+def add_line(result: SourceResult, orders: dict[str, RawOrder], receipt: str, cell: dict[str, str | None],
              file: str, loc: str) -> RawOrder:
     """Rows sharing a receipt number become one order. Its header fields come from the first row."""
-    receipt = cell["native_id"]
     order = orders.get(receipt)
     if order is None:
         # The till has no currency column because it only ever takes euros.
-        order = orders[receipt] = RawOrder("pos", file, loc, receipt, currency="EUR",
-                                           **{f: cell.get(f) for f in ORDER_FIELDS})
+        order = orders[receipt] = RawOrder("pos", file, loc, receipt, placed_at=cell.get("placed_at"), currency="EUR",
+                                           total=cell.get("total"), customer_name=cell.get("customer_name"),
+                                           customer_email=cell.get("customer_email"), ref=cell.get("ref"))
     else:
         for f in ORDER_FIELDS:
             if cell.get(f) != getattr(order, f):
@@ -102,10 +102,11 @@ def read_rows(result: SourceResult, reader: Any, header: list[str], columns: dic
             continue
 
         data_rows += 1
-        if cell["native_id"] is None:
+        receipt = cell["native_id"]
+        if receipt is None:
             result.issue("error", "pos.no_receipt", "row has no receipt number", loc, value=delim.join(row))
             continue
-        order = add_line(result, orders, cell, file, loc)
+        order = add_line(result, orders, receipt, cell, file, loc)
         if len(row) != len(header):
             result.issue("error", "pos.row_width", f"row has {len(row)} cells, header has {len(header)}", loc,
                          delim.join(row), order)

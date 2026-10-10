@@ -59,6 +59,13 @@ class Order:
         return any(i.severity == "error" for i in self.issues)
 
     @property
+    def value_eur(self) -> Decimal:
+        """The euro total, which reconciliation sets on every order that ends up clean."""
+        if self.total_eur is None:
+            raise ValueError(f"{self.order_ref} has no euro total")
+        return self.total_eur
+
+    @property
     def status(self) -> str:
         """Where the record ends up: a copy to drop, an order to quarantine, or a clean order."""
         if self.duplicate_of is not None:
