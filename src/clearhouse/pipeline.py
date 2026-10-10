@@ -31,8 +31,11 @@ class Run:
         return [o for o in self.orders if o.status == status]
 
     def repairs(self) -> list[Issue]:
-        """Values the pipeline changed. Marking a record as a copy removes it rather than repairing it."""
-        return [i for i in self.issues if i.severity == "warning" and i.code not in COPY_CODES]
+        """Warnings on orders: values repaired, or dropped because the order can do without them.
+
+        Copy markers don't count, since they remove a whole record rather than change a value.
+        """
+        return [i for o in self.orders for i in o.issues if i.severity == "warning" and i.code not in COPY_CODES]
 
 
 def run_pipeline(data: Path, as_of: date) -> Run:

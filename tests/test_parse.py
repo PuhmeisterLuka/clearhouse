@@ -3,6 +3,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
+from defects import PARSE_QUARANTINES, PARSE_REPAIRS
 
 from clearhouse.ingest.records import RawLine, RawOrder
 from clearhouse.issues import Issue
@@ -25,6 +26,8 @@ from clearhouse.parse.fields import (
 
 @pytest.mark.parametrize("raw, comma, scale, value, repaired", [
     ("1.234,56", True, 1, "1234.56", False),
+    ("1.234.567,8", True, 1, "1234567.80", False),
+    ("1234,56", True, 1, "1234.56", False),
     (" 7,00 ", True, 1, "7.00", True),
     ("23.0", False, 1, "23.00", False),
     ("1250", False, 100, "12.50", False),
@@ -40,6 +43,12 @@ def test_amount(raw, comma, scale, value, repaired):
 def test_amount_refuses(raw, scale):
     with pytest.raises(FieldError):
         parse_amount(raw, decimal_comma=False, scale=scale)
+
+
+@pytest.mark.parametrize("raw", ["12.50", "1.23,45", "1.2345,00", ",50"])
+def test_decimal_comma_amount_refuses_dots_that_arent_thousands(raw):
+    with pytest.raises(FieldError):
+        parse_amount(raw, decimal_comma=True, scale=1)
 
 
 @pytest.mark.parametrize("raw, value, repaired", [
@@ -144,26 +153,21 @@ def test_ingest_issues_carry_over_to_the_parsed_order():
 
 # Against the generated data and its ground truth
 
-QUARANTINES = {"bad_date", "missing_sku", "missing_qty"}
-REPAIRS = {"sku_variant", "email_noise", "mojibake", "qty_text", "buyer_code_noise"}
-RECOVERABLE = REPAIRS | {"euro_price_variant"}  # parsing alone must recover the true values
-
-
 @pytest.fixture(scope="module")
 def parsed(truth):
     return truth.parse()
 
 
 def test_every_parse_level_defect_is_reported_with_the_right_code(truth, parsed):
-    truth.assert_detected(parsed, QUARANTINES | REPAIRS)
+    truth.assert_detected(parsed, PARSE_QUARANTINES | PARSE_REPAIRS)
 
 
 def test_no_order_is_rejected_without_a_reason(truth, parsed):
     for o in parsed:
         if o.has_errors:
-            assert truth.kinds[o.order_ref] & QUARANTINES, o.order_ref
+            assert truth.kinds[o.order_ref] & PARSE_QUARANTINES, o.order_ref
 
 
 def test_parsed_values_equal_the_truth(truth, parsed):
-    for order in truth.comparable(parsed, RECOVERABLE):
+    for order in truth.comparable(parsed, PARSE_REPAIRS):
         truth.assert_matches(order)

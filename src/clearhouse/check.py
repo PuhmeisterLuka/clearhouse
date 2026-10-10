@@ -94,7 +94,8 @@ def check_prices(order: Order, ctx: CheckContext) -> None:
     rate = ctx.reference.rate(order.currency, order.placed_date)
     for line in order.lines:
         list_price = ctx.reference.list_price(line.sku)
-        if rate is None or list_price is None or line.unit_price is None:
+        # A free catalog item has no price ratio to judge, and a zero would divide.
+        if not rate or not list_price or line.unit_price is None:
             continue
         ratio = line.unit_price / rate / list_price
         if CENTS_SLIP[0] <= ratio <= CENTS_SLIP[1]:

@@ -43,6 +43,13 @@ def test_customers_are_found_by_email_or_code_and_take_the_crm_name():
     assert by_code.customer_id == "B001" and not by_code.issues
 
 
+def test_crm_emails_match_whatever_their_case():
+    shouty_crm = Reference({}, {}, {"C0001": CrmCustomer("C0001", "Žiga Novak", "Ziga@X.si")})
+    order = make_order([], customer_email="ziga@x.si", customer_name="Žiga Novak")
+    resolve_customers([order], shouty_crm)
+    assert order.customer_id == "C0001"
+
+
 def test_unknown_and_anonymous_customers():
     stranger = make_order([], customer_email="who@x.si")
     walk_in = make_order([], source="pos")
@@ -78,12 +85,19 @@ def test_till_copy_matched_by_ref():
 
 
 @pytest.mark.parametrize("receipt, code", [
-    (till_receipt(ref="999"), "pickup.unknown_ref"),
+    (till_receipt(ref="999", total="55.00"), "pickup.unknown_ref"),
     (till_receipt(ref="100", total="55.00"), "pickup.ref_mismatch"),
 ])
-def test_a_ref_that_doesnt_check_out_keeps_the_receipt_as_a_sale(receipt, code):
+def test_a_ref_that_doesnt_check_out_on_a_different_sale_keeps_the_receipt(receipt, code):
     match_pickups([web_pickup(), receipt])
     assert receipt.status == "clean" and code in codes(receipt)
+
+
+def test_a_mistyped_ref_on_the_same_sale_still_finds_its_web_order():
+    receipt = till_receipt(ref="1OO")
+    match_pickups([web_pickup(), receipt])
+    assert receipt.duplicate_of == "web:100"
+    assert {"pickup.unknown_ref", "order.pickup_by_sale"} <= codes(receipt)
 
 
 def test_till_copy_without_ref_matched_by_customer_items_and_timing():

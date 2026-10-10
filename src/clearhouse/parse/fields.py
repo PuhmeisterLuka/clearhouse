@@ -14,8 +14,10 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from ..money import CENT
+from ..text import email_key
 
 AMOUNT = re.compile(r"^-?\d+(\.\d+)?$")
+EU_AMOUNT = re.compile(r"^-?(\d{1,3}(\.\d{3})+|\d+)(,\d+)?$")  # a dot only ever separates thousands
 QUANTITY = re.compile(r"^\s*(-?\d+)\s*(pcs|pc|x|kos)?\s*$", re.IGNORECASE)
 SKU = re.compile(r"^([A-Z]{3})[-_ ]?(\d{1,4})$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$")
@@ -62,8 +64,11 @@ def parse_amount(raw: str, *, decimal_comma: bool, scale: int) -> Parsed[Decimal
     """'1.234,56' or '1234.56', or whole cents when scale is 100."""
     text = raw.strip()
     if decimal_comma:
+        # '12.50' isn't a thousands grouping, so reading it as 1250 would be a guess.
+        if not EU_AMOUNT.match(text):
+            raise FieldError("not a number like 1.234,56")
         text = text.replace(".", "").replace(",", ".")
-    if not AMOUNT.match(text):
+    elif not AMOUNT.match(text):
         raise FieldError("not a number")
     if scale != 1 and "." in text:
         raise FieldError(f"expected a whole number of 1/{scale} units")
@@ -91,8 +96,7 @@ def parse_sku(raw: str) -> Parsed[str]:
 
 
 def parse_email(raw: str) -> Parsed[str]:
-    # Mail providers treat the local part case-insensitively in practice, so lower-casing is safe.
-    value = raw.strip().lower()
+    value = email_key(raw)
     if not EMAIL.match(value):
         raise FieldError("not an email address")
     return Parsed(value, note_change(raw, value))
@@ -109,8 +113,8 @@ def parse_customer_code(raw: str) -> Parsed[str]:
 def fix_mojibake(text: str) -> str:
     """Undo UTF-8 that was decoded as Windows-1252 ('Å½iga' -> 'Žiga').
 
-    A genuine name almost never survives this round trip, because real accented letters are rarely
-    followed by exactly the continuation bytes UTF-8 needs. So a successful decode is the signal.
+    A genuine name almost never survives this round trip: its accented letters would need to be
+    followed by the exact continuation bytes UTF-8 expects. A successful decode is the signal.
     """
     if text.isascii():
         return text

@@ -133,7 +133,8 @@ $body
   <p>Every issue the pipeline logs has a severity:</p>
   <dl>
     <dt>Error</dt><dd>the order can't be trusted, so it goes to quarantine</dd>
-    <dt>Warning</dt><dd>something was wrong and has been repaired; the original value is kept in the issue log</dd>
+    <dt>Warning</dt><dd>something was wrong, but the order is still usable: the value was repaired, or dropped because
+      the order can do without it, and the issue log keeps the original</dd>
     <dt>Info</dt><dd>worth knowing, nothing to fix</dd>
   </dl>
   <p>The full detail is in the CSV files written next to this report: <code>orders</code>, <code>lines</code>,

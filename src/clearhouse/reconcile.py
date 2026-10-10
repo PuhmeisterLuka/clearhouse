@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import timedelta
+from decimal import Decimal
 
 from .issues import Issue
 from .model import Order
@@ -17,18 +19,22 @@ from .reference import Reference
 
 STAGE = "reconcile"
 REPEAT = "order.repeat"
-PICKUP_COPY = "order.pickup_copy"
-COPY_CODES = {REPEAT, PICKUP_COPY}  # the issue that marks a record as a copy carries one of these
+PICKUP_BY_REF = "order.pickup_by_ref"
+PICKUP_BY_SALE = "order.pickup_by_sale"
+COPY_CODES = {REPEAT, PICKUP_BY_REF, PICKUP_BY_SALE}  # the issue that marks a record as a copy carries one
 PICKUP_WINDOW = timedelta(days=7)  # how long the shop holds a click-and-collect order
 
+type SaleKey = tuple[str | None, str | None, Decimal | None, tuple[tuple[str, str, str], ...]]
 
-def items(order: Order) -> list[tuple[str, str, str]]:
-    return sorted((str(ln.sku), str(ln.qty), str(ln.unit_price)) for ln in order.lines)
+
+def sale_key(order: Order) -> SaleKey:
+    """Who bought what, for how much, regardless of which system recorded it or when."""
+    items = sorted((str(ln.sku), str(ln.qty), str(ln.unit_price)) for ln in order.lines)
+    return order.customer_email, order.currency, order.total, tuple(items)
 
 
 def same_sale(a: Order, b: Order) -> bool:
-    """Who bought what, for how much, regardless of which system recorded it or when."""
-    return (a.customer_email, a.currency, a.total, items(a)) == (b.customer_email, b.currency, b.total, items(b))
+    return sale_key(a) == sale_key(b)
 
 
 def same_record(a: Order, b: Order) -> bool:
@@ -102,17 +108,17 @@ def match_by_ref(receipt: Order, ref: str, waiting: dict[str, Order]) -> None:
                     value=ref)
     else:
         del waiting[ref]
-        mark_copy(receipt, web, PICKUP_COPY, f"till copy of {web.order_ref}, matched by its Ref")
+        mark_copy(receipt, web, PICKUP_BY_REF, f"till copy of {web.order_ref}, matched by its Ref")
 
 
-def match_by_sale(receipt: Order, waiting: dict[str, Order]) -> None:
-    candidates = [(web_id, web) for web_id, web in waiting.items()
-                  if same_sale(receipt, web) and within_pickup_window(receipt, web)]
+def match_by_sale(receipt: Order, waiting: dict[str, Order], by_sale: dict[SaleKey, list[str]]) -> None:
+    # by_sale is built once, so it can still list web orders an earlier receipt has claimed.
+    candidates = [(web_id, waiting[web_id]) for web_id in by_sale.get(sale_key(receipt), [])
+                  if web_id in waiting and within_pickup_window(receipt, waiting[web_id])]
     if len(candidates) == 1:
         web_id, web = candidates[0]
         del waiting[web_id]
-        mark_copy(receipt, web, PICKUP_COPY,
-                  f"till copy of {web.order_ref}, matched by customer, items and timing (no Ref)")
+        mark_copy(receipt, web, PICKUP_BY_SALE, f"till copy of {web.order_ref}, matched by customer, items and timing")
     elif candidates:
         refs = ", ".join(web.order_ref for _, web in candidates)
         receipt.log(STAGE, "info", "pickup.ambiguous", f"could be a copy of any of {refs}, kept as its own sale")
@@ -122,6 +128,7 @@ def match_pickups(orders: list[Order]) -> None:
     """The till receipt is the copy: the sale happened online, and counting both doubles the revenue.
 
     Receipts with a Ref are matched first, so a guess can never take a web order a Ref points at.
+    Every receipt still unmatched then gets a match by sale, so a mistyped Ref can't double count one.
     """
     waiting = {o.native_id: o for o in orders if o.native_id is not None
                and o.source == "web" and o.fulfillment == "click_and_collect" and o.duplicate_of is None}
@@ -129,9 +136,13 @@ def match_pickups(orders: list[Order]) -> None:
     for receipt in till:
         if receipt.ref is not None:
             match_by_ref(receipt, receipt.ref, waiting)
+
+    by_sale: dict[SaleKey, list[str]] = defaultdict(list)
+    for web_id, web in waiting.items():
+        by_sale[sale_key(web)].append(web_id)
     for receipt in till:
-        if receipt.ref is None and receipt.customer_email is not None:
-            match_by_sale(receipt, waiting)
+        if receipt.duplicate_of is None and receipt.customer_email is not None:
+            match_by_sale(receipt, waiting, by_sale)
 
 
 def convert_to_eur(orders: list[Order], ref: Reference) -> None:

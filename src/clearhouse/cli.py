@@ -24,7 +24,7 @@ def print_sources(sources: list[SourceResult]) -> None:
 def print_run_summary(run: Run) -> None:
     status = Counter(o.status for o in run.orders)
     print(f"\n{len(run.orders)} records: {status['clean']} clean orders, {status['quarantined']} quarantined, "
-          f"{status['duplicate']} duplicate copies; {len(run.repairs())} values repaired")
+          f"{status['duplicate']} duplicate copies; {len(run.repairs())} values repaired or dropped")
 
 
 def print_issue_counts(issues: list[Issue]) -> None:

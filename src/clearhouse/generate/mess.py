@@ -99,7 +99,7 @@ class Draft:
 # Defect injectors. Each edits a draft and returns ledger details, or None when it doesn't apply.
 
 def pick_variant(rng: random.Random, original: str, variants: list[str]) -> str | None:
-    """A variant that really differs, so the ledger never records a defect that changed nothing."""
+    """A variant that differs from the original, so the ledger never records a defect that changed nothing."""
     different = [v for v in variants if v != original]
     return rng.choice(different) if different else None
 
@@ -258,7 +258,7 @@ INJECTORS: dict[str, Injector] = {
 
 @dataclass
 class Mess:
-    """What every writer needs to dirty its export: randomness, how often to strike, and the ledger to record in."""
+    """What every writer needs to dirty its export: the random source, the defect rate and the ledger."""
     rng: random.Random
     rate: float
     ledger: Ledger = field(default_factory=Ledger)

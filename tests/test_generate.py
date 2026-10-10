@@ -1,11 +1,10 @@
-import csv
-import json
 from decimal import Decimal
 
 import pytest
 
 from clearhouse.generate.mess import INJECTORS, POS_DEFECTS, WEB_DEFECTS, WHOLESALE_DEFECTS, eu_number, generate
 from clearhouse.generate.truth import build_world
+from clearhouse.score import Truth
 
 
 def test_same_seed_gives_identical_files(tmp_path):
@@ -18,14 +17,12 @@ def test_same_seed_gives_identical_files(tmp_path):
 
 def test_ledger_points_at_real_orders(tmp_path):
     generate(tmp_path, build_world(seed=3), seed=3)
-    with (tmp_path / "truth/orders.csv").open() as f:
-        truth = {row["order_key"]: row for row in csv.DictReader(f)}
-    defects = [json.loads(line) for line in (tmp_path / "truth/defects.jsonl").open()]
-    assert defects
-    for d in defects:
-        assert d["order_key"] in truth
+    truth = Truth.load(tmp_path)
+    assert truth.ledger
+    for d in truth.ledger:
+        assert d["order_key"] in truth.orders
         if d["expected"] == "quarantine":
-            assert truth[d["order_key"]]["expected"] == "quarantine"
+            assert truth.orders[d["order_key"]]["expected"] == "quarantine"
 
 
 def test_pos_export_is_cp1250_not_utf8(tmp_path):

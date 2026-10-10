@@ -4,11 +4,11 @@ from datetime import date
 import pytest
 
 from clearhouse.export import write_tables
-from clearhouse.files import write_csv
+from clearhouse.files import read_csv, write_csv
 from clearhouse.generate.mess import INJECTORS, generate
 from clearhouse.generate.truth import build_world
 from clearhouse.pipeline import run_pipeline
-from clearhouse.score import SIGNALS, Output, Truth, read_csv, render, score
+from clearhouse.score import SIGNALS, Output, Truth, render, score
 
 
 @pytest.fixture(scope="module")

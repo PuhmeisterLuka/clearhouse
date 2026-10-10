@@ -1,8 +1,8 @@
 """The common raw layer every adapter produces.
 
-Values stay as the source wrote them (strings, unstripped), so later stages can see and log
-exactly what was wrong. The only interpretation done here is mapping each format's fields onto
-these names and recording what scale prices were written in.
+Values stay as the source wrote them (strings, unstripped), so later stages can see and log what
+was wrong. Adapters interpret only what the format itself implies: which field is which, the scale
+prices were written in, and the euros of the two sources that have no currency field.
 """
 
 from __future__ import annotations

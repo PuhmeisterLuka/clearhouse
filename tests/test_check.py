@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 from builders import make_line, make_order
+from defects import CHECK_QUARANTINES, CHECK_REPAIRS, PARSE_REPAIRS
 
 from clearhouse.check import CheckContext, check_orders
 from clearhouse.reference import Reference, load_reference
@@ -60,6 +61,13 @@ def test_price_written_in_cents_is_scaled_back():
     assert "unit_price.cents" in codes and "total.mismatch" not in codes
 
 
+def test_a_free_catalog_item_is_not_price_checked():
+    free = CheckContext(Reference({"BRK-0001": Decimal("0.00")}, {}, {}), CTX.as_of)
+    o = make_order([make_line(price="0.00")])
+    check_orders([o], free)
+    assert not o.issues
+
+
 def test_an_odd_but_not_hundredfold_price_is_flagged_and_kept():
     o = make_order([make_line(price="35.00")])
     assert checked(o)["unit_price.unusual"].severity == "info"
@@ -97,11 +105,6 @@ def test_orders_with_errors_are_not_repaired():
 
 # Against the generated data and its ground truth
 
-QUARANTINES = {"future_date", "negative_qty", "unknown_sku"}
-REPAIRS = {"missing_currency", "duplicate_row", "total_mismatch", "price_cents_error"}
-RECOVERABLE = REPAIRS | {"sku_variant", "email_noise", "mojibake", "qty_text", "buyer_code_noise", "euro_price_variant"}
-
-
 @pytest.fixture(scope="module")
 def orders(truth):
     orders = truth.parse()
@@ -110,7 +113,7 @@ def orders(truth):
 
 
 def test_every_check_level_defect_is_reported_with_the_right_code(truth, orders):
-    truth.assert_detected(orders, QUARANTINES | REPAIRS)
+    truth.assert_detected(orders, CHECK_QUARANTINES | CHECK_REPAIRS)
 
 
 def test_rejected_orders_are_exactly_the_ones_the_ledger_quarantines(truth, orders):
@@ -120,5 +123,5 @@ def test_rejected_orders_are_exactly_the_ones_the_ledger_quarantines(truth, orde
 
 
 def test_checked_values_equal_the_truth(truth, orders):
-    for order in truth.comparable(orders, RECOVERABLE):
+    for order in truth.comparable(orders, PARSE_REPAIRS | CHECK_REPAIRS):
         truth.assert_matches(order)

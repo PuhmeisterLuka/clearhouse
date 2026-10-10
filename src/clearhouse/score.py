@@ -7,14 +7,15 @@ rather than how it was produced.
 
 from __future__ import annotations
 
-import csv
-import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Self
+
+from .files import read_csv, read_jsonl
+from .money import euros
 
 # The issue codes that show the pipeline noticed each kind of injected defect.
 SIGNALS: dict[str, set[str]] = {
@@ -36,18 +37,13 @@ SIGNALS: dict[str, set[str]] = {
     "name_variant": {"customer_name.from_crm"},
     "duplicate_row": {"lines.duplicate"},
     "duplicate_order": {"order.repeat"},
-    "cross_channel_duplicate": {"order.pickup_copy"},
+    "cross_channel_duplicate": {"order.pickup_by_ref", "order.pickup_by_sale"},
 }
 COPY_KINDS = {"duplicate_order", "cross_channel_duplicate"}  # defects that add a whole extra record
 FIELDS = ("placed", "customer_id", "customer_name", "currency", "total", "total_eur", "lines")
 
 type LineKey = tuple[str, int, Decimal]
 type Defect = dict[str, Any]  # one row of the generator's defect ledger
-
-
-def read_csv(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
 
 
 def decimal(text: str) -> Decimal | None:
@@ -77,7 +73,7 @@ class Truth:
 
     @classmethod
     def load(cls, data: Path) -> Self:
-        ledger = [json.loads(line) for line in (data / "truth/defects.jsonl").open(encoding="utf-8")]
+        ledger = read_jsonl(data / "truth/defects.jsonl")
         kinds: dict[str, set[str]] = defaultdict(set)
         for defect in ledger:
             kinds[defect["order_key"]].add(defect["kind"])
@@ -187,10 +183,6 @@ class Score:
         return {name: items for name, items in found.items() if items}
 
 
-def euros(amount: Decimal) -> str:
-    return f"€{amount:,.2f}"
-
-
 def judge_outcomes(truth: Truth, outcomes: dict[str, list[str]]) -> tuple[int, list[str], list[str], list[str]]:
     right, lost, wrong, twice = 0, [], [], []
     for ref, true_order in truth.orders.items():
@@ -298,7 +290,7 @@ def render(s: Score) -> str:
     out += ["", "### Problems", ""]
     problems = s.problems()
     if not problems:
-        out.append("None. Every true order, copy and defect was handled exactly as the ledger expects.")
+        out.append("None. Every true order, copy and defect got the treatment the ledger expects.")
     for name, items in problems.items():
         shown = ", ".join(f"`{item}`" for item in items[:10])
         out.append(f"- **{name}** ({len(items)}): {shown}" + (", ..." if len(items) > 10 else ""))

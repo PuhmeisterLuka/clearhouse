@@ -8,6 +8,7 @@ from clearhouse.ingest import ingest_dir
 from clearhouse.ingest.pos import read_pos
 from clearhouse.ingest.web import read_web
 from clearhouse.ingest.wholesale import read_wholesale
+from clearhouse.score import COPY_KINDS
 
 
 def issues(result):
@@ -135,7 +136,7 @@ def test_every_true_order_and_every_extra_copy_is_read(generated):
     (out / "raw" / "notes.txt").write_text("someone dropped this here")
     results, stray = ingest_dir(out / "raw")
 
-    copies = sum(r["kind"] in ("cross_channel_duplicate", "duplicate_order") for r in ledger.rows)
+    copies = sum(r["kind"] in COPY_KINDS for r in ledger.rows)
     assert sum(r.stats.orders for r in results) == len(world.orders) + copies
     assert [i.code for i in stray] == ["ingest.unclaimed_file"]
 

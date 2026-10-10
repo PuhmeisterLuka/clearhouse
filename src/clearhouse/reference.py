@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+
+from .files import read_csv
+from .text import email_key
 
 
 @dataclass(frozen=True)
@@ -23,7 +25,8 @@ class Reference:
     customers: dict[str, CrmCustomer]  # customer_id -> customer
 
     def customer_by_email(self) -> dict[str, CrmCustomer]:
-        return {c.email: c for c in self.customers.values()}
+        """Keyed the way order emails are parsed, so 'Mia.Smith@Gmail.com' in the CRM still matches."""
+        return {email_key(c.email): c for c in self.customers.values()}
 
     def list_price(self, sku: str | None) -> Decimal | None:
         return self.list_prices.get(sku) if sku else None
@@ -37,15 +40,10 @@ class Reference:
         return self.fx.get((f"{day:%Y-%m}", currency))
 
 
-def read_rows(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
-
-
 def load_reference(ref_dir: Path) -> Reference:
-    products = read_rows(ref_dir / "products.csv")
-    rates = read_rows(ref_dir / "fx_rates.csv")
-    crm = read_rows(ref_dir / "crm_customers.csv")
+    products = read_csv(ref_dir / "products.csv")
+    rates = read_csv(ref_dir / "fx_rates.csv")
+    crm = read_csv(ref_dir / "crm_customers.csv")
     return Reference(
         list_prices={row["sku"]: Decimal(row["list_price_eur"]) for row in products},
         fx={(row["month"], row["currency"]): Decimal(row["per_eur"]) for row in rates},

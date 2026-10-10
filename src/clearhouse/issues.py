@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-# error:   the order can't be trusted and should end up in quarantine
-# warning: something was wrong but has been (or can be) repaired
+# error:   the order can't be trusted, so it goes to quarantine
+# warning: something was wrong, but the order is still usable: the value was repaired,
+#          or dropped because the order can do without it
 # info:    worth knowing, nothing to fix
 Severity = Literal["error", "warning", "info"]
 
